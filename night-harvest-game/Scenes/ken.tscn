@@ -1,0 +1,42 @@
+[gd_scene format=3 uid="uid://5jj7yn8me862"]
+
+[ext_resource type="Texture2D" uid="uid://coikfrumwggib" path="res://Assets/Player/character.png" id="1_dix5s"]
+[ext_resource type="Script" uid="uid://py73i4w2f8th" path="res://Scenes/ken.gd" id="1_tlxnr"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_tlxnr"]
+atlas = ExtResource("1_dix5s")
+region = Rect2(0, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_o2rdq"]
+atlas = ExtResource("1_dix5s")
+region = Rect2(32, 0, 32, 32)
+
+[sub_resource type="SpriteFrames" id="SpriteFrames_kpl3r"]
+animations = [{
+"frames": [{
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_tlxnr")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_o2rdq")
+}],
+"loop": 1,
+"name": &"kennig",
+"speed": 10.0
+}]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_javsr"]
+radius = 5.0
+
+[node name="CharacterBody2D" type="CharacterBody2D" unique_id=730785052]
+script = ExtResource("1_tlxnr")
+
+[node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="." unique_id=282584708]
+sprite_frames = SubResource("SpriteFrames_kpl3r")
+animation = &"kennig"
+autoplay = "kennig"
+frame_progress = 0.2582398
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="AnimatedSprite2D" unique_id=1762133050]
+position = Vector2(0, 5)
+shape = SubResource("CircleShape2D_javsr")
