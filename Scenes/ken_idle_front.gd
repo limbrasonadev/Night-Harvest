@@ -42,9 +42,9 @@ var _current_action_timestamp: int = 0
 # Natural directional hand offsets (aligned with character spritesheet)
 const HELD_OFFSETS := {
 	"down": { "pos": Vector2(6, 4), "z": 1, "flip": false, "rot": -20.0 },
-	"up": { "pos": Vector2(6, 1), "z": 1, "flip": false, "rot": -20.0 },
-	"left": { "pos": Vector2(-6, 3), "z": 1, "flip": true, "rot": 15.0 },
-	"right": { "pos": Vector2(6, 3), "z": 1, "flip": false, "rot": -15.0 }
+	"up": { "pos": Vector2(-5, -2), "z": -1, "flip": false, "rot": -20.0 },
+	"left": { "pos": Vector2(-7, 3), "z": 1, "flip": true, "rot": 15.0 },
+	"right": { "pos": Vector2(7, 3), "z": 1, "flip": false, "rot": -15.0 }
 }
 
 
@@ -236,6 +236,11 @@ func trigger_harvest() -> void:
 	_start_action(ItemDataClass.ActionType.HARVEST, anim_name)
 
 
+func _process(_delta: float) -> void:
+	if is_acting and animated_sprite:
+		_sync_held_item_animation_frame(animated_sprite.frame)
+
+
 func _start_action(action_type: int, animation_name: String) -> void:
 	is_acting = true
 	current_state = State.ACTING
@@ -257,6 +262,7 @@ func _start_action(action_type: int, animation_name: String) -> void:
 			held_item_sprite.visible = false
 	
 	_update_tool_hitbox_position()
+	animated_sprite.stop()
 	animated_sprite.play(animation_name)
 	_sync_held_item_animation_frame(0)
 	
@@ -291,59 +297,96 @@ func _sync_held_item_animation_frame(frame_idx: int) -> void:
 	var base_cfg: Dictionary = HELD_OFFSETS[dir_key]
 	var base_pos: Vector2 = base_cfg["pos"]
 	var base_rot: float = base_cfg["rot"]
-	var is_left: bool = (dir_key == "left")
 	
 	if is_acting:
 		if animated_sprite.animation == "swing":
-			# Front / Side Swing Arc
-			var rot_multiplier := -1.0 if is_left else 1.0
-			match frame_idx:
-				0: # Raise tool
-					held_item_anchor.position = base_pos + Vector2(0, -4)
-					held_item_sprite.rotation_degrees = -45.0 * rot_multiplier
-				1: # High wind-up
-					held_item_anchor.position = base_pos + Vector2(-2 if is_left else 2, -6)
-					held_item_sprite.rotation_degrees = -75.0 * rot_multiplier
-				2: # Swing down stroke
-					held_item_anchor.position = base_pos + Vector2(-3 if is_left else 3, -2)
-					held_item_sprite.rotation_degrees = 0.0 * rot_multiplier
-				3: # Peak Impact frame
-					held_item_anchor.position = base_pos + (last_direction * 6.0) + Vector2(0, 3)
-					held_item_sprite.rotation_degrees = 65.0 * rot_multiplier
-				4: # Follow through
-					held_item_anchor.position = base_pos + (last_direction * 4.0) + Vector2(0, 3)
-					held_item_sprite.rotation_degrees = 40.0 * rot_multiplier
-				5: # Recovery
-					held_item_anchor.position = base_pos
-					held_item_sprite.rotation_degrees = base_rot
+			match dir_key:
+				"right":
+					match frame_idx:
+						0: # Wind-up back
+							held_item_anchor.position = Vector2(-2, -3)
+							held_item_sprite.rotation_degrees = -75.0
+						1: # High overhead wind-up
+							held_item_anchor.position = Vector2(0, -6)
+							held_item_sprite.rotation_degrees = -95.0
+						2: # Slashing forward
+							held_item_anchor.position = Vector2(6, -2)
+							held_item_sprite.rotation_degrees = -10.0
+						3: # Full strike extension (Peak impact)
+							held_item_anchor.position = Vector2(12, 3)
+							held_item_sprite.rotation_degrees = 45.0
+						4: # Follow through down
+							held_item_anchor.position = Vector2(10, 6)
+							held_item_sprite.rotation_degrees = 70.0
+						_: # Recovery to rest
+							held_item_anchor.position = base_pos
+							held_item_sprite.rotation_degrees = base_rot
+				"left":
+					match frame_idx:
+						0: # Wind-up back
+							held_item_anchor.position = Vector2(2, -3)
+							held_item_sprite.rotation_degrees = 75.0
+						1: # High overhead wind-up
+							held_item_anchor.position = Vector2(0, -6)
+							held_item_sprite.rotation_degrees = 95.0
+						2: # Slashing forward
+							held_item_anchor.position = Vector2(-6, -2)
+							held_item_sprite.rotation_degrees = 10.0
+						3: # Full strike extension (Peak impact)
+							held_item_anchor.position = Vector2(-12, 3)
+							held_item_sprite.rotation_degrees = -45.0
+						4: # Follow through down
+							held_item_anchor.position = Vector2(-10, 6)
+							held_item_sprite.rotation_degrees = -70.0
+						_: # Recovery to rest
+							held_item_anchor.position = base_pos
+							held_item_sprite.rotation_degrees = base_rot
+				"down", _:
+					match frame_idx:
+						0: # Raise tool
+							held_item_anchor.position = Vector2(4, -3)
+							held_item_sprite.rotation_degrees = -60.0
+						1: # High wind-up
+							held_item_anchor.position = Vector2(5, -6)
+							held_item_sprite.rotation_degrees = -90.0
+						2: # Swing down stroke
+							held_item_anchor.position = Vector2(8, -1)
+							held_item_sprite.rotation_degrees = -15.0
+						3: # Peak Impact frame
+							held_item_anchor.position = Vector2(6, 7)
+							held_item_sprite.rotation_degrees = 55.0
+						4: # Follow through
+							held_item_anchor.position = Vector2(3, 8)
+							held_item_sprite.rotation_degrees = 75.0
+						_: # Recovery
+							held_item_anchor.position = base_pos
+							held_item_sprite.rotation_degrees = base_rot
 		elif animated_sprite.animation == "swing_back":
 			# Upward / Overhead Swing Arc (Facing Back)
 			match frame_idx:
 				0:
-					held_item_anchor.position = base_pos + Vector2(1, 2)
-					held_item_sprite.rotation_degrees = -10.0
+					held_item_anchor.position = Vector2(6, 3)
+					held_item_sprite.rotation_degrees = 20.0
 				1:
-					held_item_anchor.position = base_pos + Vector2(2, -3)
-					held_item_sprite.rotation_degrees = 35.0
+					held_item_anchor.position = Vector2(6, -2)
+					held_item_sprite.rotation_degrees = 50.0
 				2:
-					held_item_anchor.position = base_pos + Vector2(0, -7)
-					held_item_sprite.rotation_degrees = 0.0
+					held_item_anchor.position = Vector2(3, -7)
+					held_item_sprite.rotation_degrees = 15.0
 				3: # Peak overhead strike
-					held_item_anchor.position = base_pos + Vector2(-3, -7)
-					held_item_sprite.rotation_degrees = -60.0
+					held_item_anchor.position = Vector2(-2, -9)
+					held_item_sprite.rotation_degrees = -50.0
 				4:
-					held_item_anchor.position = base_pos + Vector2(-5, -4)
-					held_item_sprite.rotation_degrees = -75.0
+					held_item_anchor.position = Vector2(-5, -6)
+					held_item_sprite.rotation_degrees = -80.0
 				_:
 					held_item_anchor.position = base_pos
 					held_item_sprite.rotation_degrees = base_rot
 	elif current_state == State.WALKING:
-		# Subtle walking bob in sync with Ken's footsteps
 		var bob := -1.5 if (frame_idx % 2 == 1) else 0.0
 		held_item_anchor.position = base_pos + Vector2(0, bob)
 		held_item_sprite.rotation_degrees = base_rot
 	else:
-		# Idle resting comfortably in hand
 		held_item_anchor.position = base_pos
 		held_item_sprite.rotation_degrees = base_rot
 
@@ -432,11 +475,15 @@ func trigger_drop_item() -> void:
 		return
 	
 	var active_slot: int = hotbar.get("selected_slot") if hotbar.get("selected_slot") != null else 0
-	var slot_data: Dictionary = inv.call("get_item_at", active_slot)
+	var slot_data: Dictionary = hotbar.call("get_slot_data", active_slot) if hotbar.has_method("get_slot_data") else (inv.call("get_hotbar_item_at", active_slot) if inv.has_method("get_hotbar_item_at") else inv.call("get_item_at", active_slot))
 	var item_to_drop: Resource = slot_data.get("item", null)
 	
 	if item_to_drop:
-		var removed_item: Resource = inv.call("remove_item_at", active_slot, 1)
+		var removed_item: Resource = null
+		if inv.has_method("remove_hotbar_item_at"):
+			removed_item = inv.call("remove_hotbar_item_at", active_slot, 1)
+		else:
+			removed_item = inv.call("remove_item_at", active_slot, 1)
 		if removed_item:
 			var world_item: Area2D = WorldItemScene.instantiate()
 			var spawn_parent: Node = get_parent() if get_parent() else self

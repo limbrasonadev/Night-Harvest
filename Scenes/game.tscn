@@ -1521,6 +1521,7 @@ position = Vector2(7, -2)
 [node name="HUD" parent="UI" unique_id=315441563 instance=ExtResource("18_hud")]
 
 [node name="Inventory" parent="UI" unique_id=1394110535 instance=ExtResource("19_inv")]
+visible = true
 
 [node name="Menu" parent="UI" unique_id=23642635 instance=ExtResource("20_menu")]
 visible = true

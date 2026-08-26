@@ -31,7 +31,11 @@ func _ready() -> void:
 		if slot_node:
 			if not slot_node.gui_input.is_connected(_on_slot_gui_input):
 				slot_node.gui_input.connect(_on_slot_gui_input.bind(i))
-			slot_node.set_drag_forwarding(Callable(self, "_get_slot_drag_data").bind(i), Callable(self, "_can_slot_drop_data"), Callable(self, "_slot_drop_data").bind(i))
+			slot_node.set_drag_forwarding(
+				Callable(self, "_get_slot_drag_data").bind(i),
+				Callable(self, "_can_slot_drop_data"),
+				Callable(self, "_slot_drop_data").bind(i)
+			)
 	
 	if inventory_button and not inventory_button.pressed.is_connected(_on_inventory_button_pressed):
 		inventory_button.pressed.connect(_on_inventory_button_pressed)
@@ -49,7 +53,7 @@ func _connect_inventory() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# Don't switch hotbar slots if inventory UI is currently open (inventory handles slot assignment)
+	# Don't switch hotbar slots if inventory UI is currently open (inventory handles its own quick assign)
 	var inv = get_inventory()
 	if inv and inv.get("is_open"):
 		return
@@ -89,8 +93,11 @@ func get_selected_item() -> Resource:
 
 func get_slot_data(index: int) -> Dictionary:
 	var inv = get_inventory()
-	if inv and inv.has_method("get_item_at"):
-		return inv.get_item_at(index)
+	if inv:
+		if inv.has_method("get_hotbar_item_at"):
+			return inv.get_hotbar_item_at(index)
+		elif inv.has_method("get_item_at"):
+			return inv.get_item_at(index)
 	return { "item": null, "amount": 0 }
 
 
@@ -117,10 +124,11 @@ func _on_inventory_changed() -> void:
 func _on_slot_gui_input(event: InputEvent, slot_index: int) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var inv = get_inventory()
-		if inv and inv.get("is_open") and inv.get("selected_inventory_slot") >= 0:
-			var from_slot: int = inv.get("selected_inventory_slot")
-			inv.move_to_hotbar(from_slot, slot_index)
-			inv.set("selected_inventory_slot", -1)
+		if inv and inv.get("is_open") and inv.get("selected_slot_index") >= 0:
+			var from_type: String = inv.get("selected_slot_type")
+			var from_slot: int = inv.get("selected_slot_index")
+			inv.transfer_or_swap(from_type, from_slot, "hotbar", slot_index)
+			inv.clear_selection()
 			inv._update_slot_visuals()
 		else:
 			select_slot(slot_index)
@@ -136,27 +144,55 @@ func _get_slot_drag_data(_at_position: Vector2, slot_index: int) -> Variant:
 		return null
 	
 	var item: Resource = slot_data["item"]
-	var preview := TextureRect.new()
-	preview.texture = item.get("icon")
-	preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	preview.custom_minimum_size = Vector2(32, 32)
-	preview.modulate = Color(1, 1, 1, 0.8)
-	set_drag_preview(preview)
+	var amount: int = slot_data["amount"]
 	
-	return { "from_slot": slot_index, "item": item }
+	var preview_root := Control.new()
+	var preview_panel := Panel.new()
+	preview_panel.custom_minimum_size = Vector2(44, 44)
+	preview_panel.size = Vector2(44, 44)
+	preview_panel.position = Vector2(-22, -22)
+	
+	var icon_rect := TextureRect.new()
+	icon_rect.texture = item.get("icon")
+	icon_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon_rect.custom_minimum_size = Vector2(36, 36)
+	icon_rect.size = Vector2(36, 36)
+	icon_rect.position = Vector2(4, 4)
+	preview_panel.add_child(icon_rect)
+	
+	if amount > 1:
+		var count_lbl := Label.new()
+		count_lbl.text = str(amount)
+		count_lbl.add_theme_font_size_override("font_size", 10)
+		count_lbl.add_theme_color_override("font_shadow_color", Color.BLACK)
+		count_lbl.position = Vector2(24, 26)
+		preview_panel.add_child(count_lbl)
+	
+	preview_root.add_child(preview_panel)
+	preview_root.modulate = Color(1.0, 1.0, 1.0, 0.85)
+	set_drag_preview(preview_root)
+	
+	return {
+		"slot_type": "hotbar",
+		"slot_index": slot_index,
+		"item": item,
+		"amount": amount
+	}
 
 
 func _can_slot_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	return (typeof(data) == TYPE_DICTIONARY and data.has("from_slot"))
+	return (typeof(data) == TYPE_DICTIONARY and data.has("slot_type") and data.has("slot_index"))
 
 
 func _slot_drop_data(_at_position: Vector2, data: Variant, to_slot_index: int) -> void:
-	if typeof(data) == TYPE_DICTIONARY and data.has("from_slot"):
-		var from_slot: int = data["from_slot"]
+	if typeof(data) == TYPE_DICTIONARY and data.has("slot_type") and data.has("slot_index"):
+		var from_type: String = data["slot_type"]
+		var from_slot: int = data["slot_index"]
 		var inv = get_inventory()
-		if inv and inv.has_method("swap_slots"):
-			inv.swap_slots(from_slot, to_slot_index)
-			inv.set("selected_inventory_slot", -1)
+		if inv and inv.has_method("transfer_or_swap"):
+			inv.transfer_or_swap(from_type, from_slot, "hotbar", to_slot_index)
+			inv.clear_selection()
 			inv._update_slot_visuals()
 
 

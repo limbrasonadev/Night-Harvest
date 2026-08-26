@@ -117,27 +117,27 @@ func test_inventory_slot_swapping() -> void:
 
 
 func test_inventory_to_hotbar_assignment() -> void:
-	print("4. Testing Inventory to Hotbar Assignment...")
+	print("4. Testing Inventory to Hotbar Assignment & Space Saving...")
 	var inv_scene = load("res://Scenes/UI/inventory.tscn")
 	var inv: InventoryUI = inv_scene.instantiate()
 	add_child(inv)
 	
 	var seed = ItemDatabaseScript.get_item("wheat_seed")
-	# Place seed in inventory slot 7
+	# Place seed in backpack slot 7
 	inv.slots[7] = { "item": seed, "amount": 5 }
 	
-	# Move from slot 7 to hotbar slot 0 (Slot 1 in UI)
+	# Move from backpack slot 7 to hotbar slot 0
 	inv.move_to_hotbar(7, 0)
-	assert(inv.get_item_at(0)["item"].item_id == "wheat_seed", "Hotbar slot 0 now has wheat seed")
-	assert(inv.get_item_at(0)["amount"] == 5, "Hotbar slot 0 has 5 wheat seed")
-	assert(inv.get_item_at(7)["item"] == null, "Slot 7 is now empty")
+	assert(inv.get_hotbar_item_at(0)["item"].item_id == "wheat_seed", "Hotbar slot 0 now has wheat seed")
+	assert(inv.get_hotbar_item_at(0)["amount"] == 5, "Hotbar slot 0 has 5 wheat seed")
+	assert(inv.get_item_at(7)["item"] == null, "Backpack slot 7 is now empty, saving space for other items")
 	
 	inv.queue_free()
-	print("Hotbar Assignment tests: OK")
+	print("Hotbar Assignment & Space Saving tests: OK")
 
 
 func test_hotbar_reactive_to_inventory() -> void:
-	print("5. Testing Hotbar Reactive Projection of Inventory...")
+	print("5. Testing Hotbar Reactive Integration...")
 	var root = Node2D.new()
 	add_child(root)
 	
@@ -152,8 +152,8 @@ func test_hotbar_reactive_to_inventory() -> void:
 	var axe = ItemDatabaseScript.get_item("wood_axe")
 	var sword = ItemDatabaseScript.get_item("iron_sword")
 	
-	inv.add_item(axe, 1)   # Goes to slot 0
-	inv.add_item(sword, 1) # Goes to slot 1
+	inv.add_item(axe, 1)   # Goes to hotbar slot 0
+	inv.add_item(sword, 1) # Goes to hotbar slot 1
 	
 	# Hotbar slot 0 should instantly reflect axe
 	hotbar.select_slot(0)
@@ -163,13 +163,13 @@ func test_hotbar_reactive_to_inventory() -> void:
 	hotbar.select_slot(1)
 	assert(hotbar.get_selected_item() == sword, "Hotbar slot 1 is iron sword")
 	
-	# Swap in inventory: slot 0 and slot 1
-	inv.swap_slots(0, 1)
+	# Swap in hotbar: slot 0 and slot 1
+	inv.swap_hotbar_slots(0, 1)
 	# Hotbar slot 1 should now instantly be axe
-	assert(hotbar.get_selected_item() == axe, "Hotbar slot 1 is now axe after inventory swap")
+	assert(hotbar.get_selected_item() == axe, "Hotbar slot 1 is now axe after swap")
 	
 	root.queue_free()
-	print("Hotbar Reactive Projection tests: OK")
+	print("Hotbar Reactive Integration tests: OK")
 
 
 func test_minimap() -> void:
@@ -353,8 +353,8 @@ func test_deterministic_drop_and_held_clear() -> void:
 	# Drop the 1 seed
 	ken.trigger_drop_item()
 	
-	# Slot 0 in inventory is now empty (count 0)
-	assert(inv.get_item_at(0)["item"] == null, "Inventory slot 0 is empty")
+	# Slot 0 in hotbar is now empty (count 0)
+	assert(inv.get_hotbar_item_at(0)["item"] == null, "Hotbar slot 0 is empty")
 	# Hotbar slot 0 returns null
 	assert(hotbar.get_selected_item() == null, "Hotbar selected item is null")
 	# Ken held item must immediately be cleared and invisible
@@ -471,8 +471,9 @@ func test_pickup_drop_cycle() -> void:
 	w_item.set_item(mushroom, 3)
 	
 	ken.trigger_interact()
-	assert(inv.get_item_at(0)["item"].item_id == "wild_mushroom", "Item is wild mushroom")
-	assert(inv.get_item_at(0)["amount"] == 3, "Item amount is 3")
+	var picked_slot = inv.get_hotbar_item_at(0) if inv.get_hotbar_item_at(0)["item"] != null else inv.get_item_at(0)
+	assert(picked_slot["item"].item_id == "wild_mushroom", "Item is wild mushroom")
+	assert(picked_slot["amount"] == 3, "Item amount is 3")
 	
 	world_scene.queue_free()
 	print("Pickup cycle tests: OK")
