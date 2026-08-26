@@ -77,7 +77,6 @@ func set_nightfall_warning(time_str: String) -> void:
 
 
 func _format_number(n: int) -> String:
-	# Format thousands with commas
 	var s := str(n)
 	var result := ""
 	var count := 0

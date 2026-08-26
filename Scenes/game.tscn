@@ -20,6 +20,8 @@
 [ext_resource type="PackedScene" path="res://Scenes/UI/menu.tscn" id="20_menu"]
 [ext_resource type="Script" uid="uid://dtcg45ofa6vrd" path="res://scripts/game.gd" id="21_game"]
 [ext_resource type="PackedScene" path="res://Scenes/tree.tscn" id="22_tree"]
+[ext_resource type="PackedScene" uid="uid://bch3st0bj3ct1" path="res://Scenes/Objects/chest.tscn" id="23_chest"]
+[ext_resource type="PackedScene" path="res://Scenes/UI/chest_ui.tscn" id="24_chest_ui"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_1phco"]
 texture = ExtResource("1_rfjv2")
@@ -1480,6 +1482,8 @@ tile_set = SubResource("TileSet_voovr")
 tile_map_data = PackedByteArray("AAAAAPv/AAAAAAAAAAD8//7/AgAEAAUAAAD8//3/AgAEAAQAAAA=")
 tile_set = SubResource("TileSet_wu81v")
 
+[node name="TileMapLayer" type="TileMapLayer" parent="TileMap/TileMapLayer/TileMapLayer" unique_id=186045129]
+
 [node name="Tree1" parent="." unique_id=773383763 instance=ExtResource("22_tree")]
 position = Vector2(-148, -70)
 
@@ -1516,12 +1520,16 @@ position = Vector2(139, 47)
 [node name="CharacterBody2D3" parent="." unique_id=730785052 instance=ExtResource("17_ewbju")]
 position = Vector2(7, -2)
 
+[node name="Chest" parent="." unique_id=537294619 instance=ExtResource("23_chest")]
+position = Vector2(42, 8)
+
 [node name="UI" type="CanvasLayer" parent="." unique_id=1940278383]
 
 [node name="HUD" parent="UI" unique_id=315441563 instance=ExtResource("18_hud")]
 
 [node name="Inventory" parent="UI" unique_id=1394110535 instance=ExtResource("19_inv")]
-visible = true
 
 [node name="Menu" parent="UI" unique_id=23642635 instance=ExtResource("20_menu")]
-visible = true
+
+[node name="ChestUI" parent="UI" unique_id=772626261 instance=ExtResource("24_chest_ui")]
+visible = false

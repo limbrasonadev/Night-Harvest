@@ -9,12 +9,13 @@ enum State {
 const ItemDataClass = preload("res://scripts/item_data.gd")
 const WorldItemClass = preload("res://scripts/world_item.gd")
 const WorldItemScene = preload("res://Scenes/world_item.tscn")
+const SwooshEffectClass = preload("res://scripts/swoosh_effect.gd")
 
 @export var walk_speed: float = 135.0
 @export var sprint_speed: float = 195.0
 @export var speed: float = 135.0
 @export var pickup_radius: float = 24.0
-@export var interaction_distance: float = 16.0
+@export var interaction_distance: float = 32.0
 
 @export_group("Camera Settings")
 @export var camera_zoom: Vector2 = Vector2(3.0, 3.0)
@@ -30,6 +31,7 @@ const WorldItemScene = preload("res://Scenes/world_item.tscn")
 @onready var held_item_sprite: Sprite2D = $HeldItemAnchor/HeldItemSprite
 @onready var tool_hitbox: Area2D = get_node_or_null("ToolHitbox")
 @onready var camera: Camera2D = get_node_or_null("Camera2D")
+@onready var swoosh_effect: SwooshEffect = get_node_or_null("SwooshEffect")
 
 var current_state: State = State.IDLE
 var last_direction: Vector2 = Vector2.DOWN
@@ -38,6 +40,11 @@ var current_held_item: Resource = null
 var current_action_type: int = 0
 var impact_executed: bool = false
 var _current_action_timestamp: int = 0
+
+# Cooldown & Continuous Hold Tracking
+var _last_action_end_time: int = 0
+var _current_item_cooldown: float = 0.2
+var _hit_targets_this_swing: Array = []
 
 # Natural directional hand offsets (aligned with character spritesheet)
 const HELD_OFFSETS := {
@@ -50,6 +57,12 @@ const HELD_OFFSETS := {
 
 func _ready() -> void:
 	add_to_group("player")
+	
+	if not swoosh_effect:
+		swoosh_effect = get_node_or_null("SwooshEffect")
+	if not swoosh_effect:
+		swoosh_effect = SwooshEffectClass.new()
+		add_child(swoosh_effect)
 	
 	if animated_sprite:
 		animated_sprite.animation_finished.connect(_on_animation_finished)
@@ -80,6 +93,11 @@ func _setup_camera() -> void:
 		camera.limit_top = camera_limit_top
 		camera.limit_right = camera_limit_right
 		camera.limit_bottom = camera_limit_bottom
+
+
+func _process(_delta: float) -> void:
+	if is_acting and animated_sprite:
+		_sync_held_item_animation_frame(animated_sprite.frame)
 
 
 func _physics_process(_delta: float) -> void:
@@ -138,7 +156,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		trigger_watering()
 	elif event.is_action_pressed("harvest") or (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
 		trigger_primary_action()
-	elif event.is_action_pressed("interact") or (event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_E):
+	elif event.is_action_pressed("interact") or (event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_G or event.keycode == KEY_E)):
 		trigger_interact()
 	elif event.is_action_pressed("drop_item") or (event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_Q):
 		trigger_drop_item()
@@ -148,6 +166,7 @@ func check_action_inputs() -> bool:
 	if is_acting or is_ui_blocking():
 		return false
 
+	# 1. Direct one-shot inputs
 	if Input.is_action_just_pressed("swing") or Input.is_action_just_pressed("harvest"):
 		trigger_primary_action()
 		return true
@@ -160,7 +179,29 @@ func check_action_inputs() -> bool:
 	elif Input.is_action_just_pressed("drop_item"):
 		trigger_drop_item()
 		return true
+
+	# 2. Continuous Hold-to-Swing check
+	if _is_action_key_held() and _is_cooldown_ready():
+		trigger_primary_action()
+		return true
+
 	return false
+
+
+func _is_action_key_held() -> bool:
+	return (
+		Input.is_action_pressed("swing")
+		or Input.is_action_pressed("harvest")
+		or Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+		or Input.is_key_pressed(KEY_SPACE)
+	)
+
+
+func _is_cooldown_ready() -> bool:
+	if _last_action_end_time == 0:
+		return true
+	var elapsed_sec := (Time.get_ticks_msec() - _last_action_end_time) / 1000.0
+	return elapsed_sec >= _current_item_cooldown
 
 
 # ==============================================================================
@@ -171,8 +212,12 @@ func trigger_primary_action() -> void:
 	if is_acting or is_ui_blocking():
 		return
 	
-	var action_type: int = 0
-	if current_held_item and current_held_item.get("action_type") != null:
+	# If no item is equipped in active slot, do not swing weapon
+	if not current_held_item:
+		return
+	
+	var action_type: int = ItemDataClass.ActionType.NONE
+	if current_held_item.get("action_type") != null:
 		action_type = current_held_item.get("action_type")
 	
 	match action_type:
@@ -236,17 +281,22 @@ func trigger_harvest() -> void:
 	_start_action(ItemDataClass.ActionType.HARVEST, anim_name)
 
 
-func _process(_delta: float) -> void:
-	if is_acting and animated_sprite:
-		_sync_held_item_animation_frame(animated_sprite.frame)
-
-
 func _start_action(action_type: int, animation_name: String) -> void:
 	is_acting = true
 	current_state = State.ACTING
 	current_action_type = action_type
 	impact_executed = false
 	velocity = Vector2.ZERO
+	_hit_targets_this_swing.clear()
+	
+	# Fetch item speed scaling and cooldown
+	var speed_mult := 1.0
+	if current_held_item and current_held_item.get("swing_speed_scale") != null:
+		speed_mult = max(0.5, current_held_item.get("swing_speed_scale"))
+	
+	_current_item_cooldown = 0.2
+	if current_held_item and current_held_item.get("swing_cooldown") != null:
+		_current_item_cooldown = max(0.05, current_held_item.get("swing_cooldown"))
 	
 	# Direction-specific sprite orientation
 	if animation_name == "swing":
@@ -257,19 +307,23 @@ func _start_action(action_type: int, animation_name: String) -> void:
 	elif animation_name == "swing_back":
 		animated_sprite.flip_h = false
 	elif animation_name.begins_with("watering_") or animation_name.begins_with("harvest_"):
-		# Hide held tool overlay during built-in watering/harvest animations
 		if held_item_sprite:
 			held_item_sprite.visible = false
 	
 	_update_tool_hitbox_position()
-	animated_sprite.stop()
-	animated_sprite.play(animation_name)
+	
+	if animated_sprite:
+		animated_sprite.speed_scale = speed_mult
+		animated_sprite.stop()
+		animated_sprite.play(animation_name)
+	
 	_sync_held_item_animation_frame(0)
 	
-	# Failsafe action timeout: guarantee action lock releases within 0.55s
+	# Failsafe action timeout (scaled with speed)
 	var action_id := Time.get_ticks_msec()
 	_current_action_timestamp = action_id
-	get_tree().create_timer(0.55).timeout.connect(func():
+	var failsafe_duration := 0.55 / speed_mult
+	get_tree().create_timer(failsafe_duration).timeout.connect(func():
 		if is_acting and _current_action_timestamp == action_id:
 			_on_animation_finished()
 	)
@@ -303,66 +357,65 @@ func _sync_held_item_animation_frame(frame_idx: int) -> void:
 			match dir_key:
 				"right":
 					match frame_idx:
-						0: # Wind-up back
+						0:
 							held_item_anchor.position = Vector2(-2, -3)
 							held_item_sprite.rotation_degrees = -75.0
-						1: # High overhead wind-up
+						1:
 							held_item_anchor.position = Vector2(0, -6)
 							held_item_sprite.rotation_degrees = -95.0
-						2: # Slashing forward
+						2:
 							held_item_anchor.position = Vector2(6, -2)
 							held_item_sprite.rotation_degrees = -10.0
-						3: # Full strike extension (Peak impact)
+						3:
 							held_item_anchor.position = Vector2(12, 3)
 							held_item_sprite.rotation_degrees = 45.0
-						4: # Follow through down
+						4:
 							held_item_anchor.position = Vector2(10, 6)
 							held_item_sprite.rotation_degrees = 70.0
-						_: # Recovery to rest
+						_:
 							held_item_anchor.position = base_pos
 							held_item_sprite.rotation_degrees = base_rot
 				"left":
 					match frame_idx:
-						0: # Wind-up back
+						0:
 							held_item_anchor.position = Vector2(2, -3)
 							held_item_sprite.rotation_degrees = 75.0
-						1: # High overhead wind-up
+						1:
 							held_item_anchor.position = Vector2(0, -6)
 							held_item_sprite.rotation_degrees = 95.0
-						2: # Slashing forward
+						2:
 							held_item_anchor.position = Vector2(-6, -2)
 							held_item_sprite.rotation_degrees = 10.0
-						3: # Full strike extension (Peak impact)
+						3:
 							held_item_anchor.position = Vector2(-12, 3)
 							held_item_sprite.rotation_degrees = -45.0
-						4: # Follow through down
+						4:
 							held_item_anchor.position = Vector2(-10, 6)
 							held_item_sprite.rotation_degrees = -70.0
-						_: # Recovery to rest
+						_:
 							held_item_anchor.position = base_pos
 							held_item_sprite.rotation_degrees = base_rot
 				"down", _:
 					match frame_idx:
-						0: # Raise tool
+						0:
 							held_item_anchor.position = Vector2(4, -3)
 							held_item_sprite.rotation_degrees = -60.0
-						1: # High wind-up
+						1:
 							held_item_anchor.position = Vector2(5, -6)
 							held_item_sprite.rotation_degrees = -90.0
-						2: # Swing down stroke
+						2:
 							held_item_anchor.position = Vector2(8, -1)
 							held_item_sprite.rotation_degrees = -15.0
-						3: # Peak Impact frame
+						3:
 							held_item_anchor.position = Vector2(6, 7)
 							held_item_sprite.rotation_degrees = 55.0
-						4: # Follow through
+						4:
 							held_item_anchor.position = Vector2(3, 8)
 							held_item_sprite.rotation_degrees = 75.0
-						_: # Recovery
+						_:
 							held_item_anchor.position = base_pos
 							held_item_sprite.rotation_degrees = base_rot
 		elif animated_sprite.animation == "swing_back":
-			# Upward / Overhead Swing Arc (Facing Back)
 			match frame_idx:
 				0:
 					held_item_anchor.position = Vector2(6, 3)
@@ -373,7 +426,7 @@ func _sync_held_item_animation_frame(frame_idx: int) -> void:
 				2:
 					held_item_anchor.position = Vector2(3, -7)
 					held_item_sprite.rotation_degrees = 15.0
-				3: # Peak overhead strike
+				3:
 					held_item_anchor.position = Vector2(-2, -9)
 					held_item_sprite.rotation_degrees = -50.0
 				4:
@@ -392,27 +445,53 @@ func _sync_held_item_animation_frame(frame_idx: int) -> void:
 
 
 func _execute_action_impact() -> void:
-	var tool_power: int = 1
-	var is_axe: bool = false
-	if current_held_item:
-		if current_held_item.get("tool_power") != null:
-			tool_power = current_held_item.get("tool_power")
-		if current_held_item.get("action_type") == ItemDataClass.ActionType.CHOP or current_held_item.get("item_id") == "wood_axe":
-			is_axe = true
+	if not current_held_item:
+		return
 	
-	# 1. Check for choppable trees strictly in near melee reach
+	var tool_power: int = current_held_item.get("tool_power") if current_held_item.get("tool_power") != null else 1
+	var damage: int = current_held_item.get("weapon_damage") if current_held_item.get("weapon_damage") != null else 10
+	var is_axe: bool = (current_held_item.get("action_type") == ItemDataClass.ActionType.CHOP or current_held_item.get("item_id") == "wood_axe")
+	var knockback: float = current_held_item.get("knockback_force") if current_held_item.get("knockback_force") != null else 40.0
+	var s_scale: Vector2 = current_held_item.get("swoosh_scale") if current_held_item.get("swoosh_scale") != null else Vector2.ONE
+	var s_color: Color = current_held_item.get("swoosh_color") if current_held_item.get("swoosh_color") != null else Color.WHITE
+	var s_duration: float = 0.14
+	if current_held_item.get("swing_speed_scale") != null:
+		s_duration /= max(0.5, current_held_item.get("swing_speed_scale"))
+	
+	# 1. Trigger Air-Swoosh Effect
+	if swoosh_effect and (animated_sprite.animation == "swing" or animated_sprite.animation == "swing_back"):
+		swoosh_effect.play_swoosh(last_direction, s_scale, s_color, s_duration)
+	
+	# 2. Check for choppable trees in reach
 	var hit_tree: TreeEntity = get_target_tree_in_reach()
-	if hit_tree:
+	if hit_tree and not _hit_targets_this_swing.has(hit_tree):
+		_hit_targets_this_swing.append(hit_tree)
 		hit_tree.take_hit(tool_power, last_direction, is_axe)
 		return
 	
-	# 2. Check for general interactable objects in hitbox
+	# 3. Check for combat enemies and interactable targets in tool hitbox
 	if tool_hitbox:
 		var bodies = tool_hitbox.get_overlapping_bodies()
 		for body in bodies:
-			if body != self and body.has_method("take_hit"):
-				body.take_hit(tool_power, last_direction)
-				return
+			if body != self and is_instance_valid(body) and not _hit_targets_this_swing.has(body):
+				_hit_targets_this_swing.append(body)
+				if body.has_method("take_damage"):
+					body.take_damage(damage, last_direction, knockback)
+					return
+				elif body.has_method("take_hit"):
+					body.take_hit(tool_power, last_direction)
+					return
+		
+		var areas = tool_hitbox.get_overlapping_areas()
+		for area in areas:
+			if area != tool_hitbox and is_instance_valid(area) and not _hit_targets_this_swing.has(area):
+				_hit_targets_this_swing.append(area)
+				if area.has_method("take_damage"):
+					area.take_damage(damage, last_direction, knockback)
+					return
+				elif area.has_method("take_hit"):
+					area.take_hit(tool_power, last_direction)
+					return
 
 
 func get_target_tree_in_reach() -> TreeEntity:
@@ -422,7 +501,7 @@ func get_target_tree_in_reach() -> TreeEntity:
 	var trees := get_tree().get_nodes_in_group("choppable_trees")
 	var reach_point := global_position + (last_direction * 14.0)
 	var closest_tree: TreeEntity = null
-	var min_dist := 16.0 # Strict close range (1 tile only)
+	var min_dist := 16.0
 	
 	for tree_node in trees:
 		if tree_node is TreeEntity and is_instance_valid(tree_node) and not tree_node.is_dead:
@@ -443,14 +522,29 @@ func get_target_tree_in_reach() -> TreeEntity:
 func _update_tool_hitbox_position() -> void:
 	if not tool_hitbox:
 		return
-	tool_hitbox.position = last_direction * 10.0
+	
+	var reach_dist := 10.0
+	if current_held_item and current_held_item.get("swing_range") != null:
+		reach_dist = current_held_item.get("swing_range") * 0.5
+	
+	tool_hitbox.position = last_direction * reach_dist
 
 
 # ==============================================================================
-# WORLD ITEM PICKUP & DROP
+# WORLD ITEM & CHEST INTERACTION
 # ==============================================================================
 
 func trigger_interact() -> void:
+	if is_ui_blocking():
+		return
+	
+	# 1. Check for nearby Chest
+	var chest: ChestEntity = get_closest_chest()
+	if chest and is_instance_valid(chest):
+		chest.interact(self)
+		return
+	
+	# 2. Check for ground world item
 	var closest_item: Area2D = get_closest_world_item()
 	if closest_item and is_instance_valid(closest_item):
 		var inv: Control = get_inventory()
@@ -465,7 +559,22 @@ func trigger_interact() -> void:
 			var item_name: String = item_data.get("display_name") if item_data and item_data.get("display_name") != null else "Item"
 			print("Ken: Picked up ", item_name)
 	else:
-		print("Ken: No item nearby to interact/pickup")
+		print("Ken: No chest or item nearby")
+
+
+func get_closest_chest() -> ChestEntity:
+	if not get_tree():
+		return null
+	var chests := get_tree().get_nodes_in_group("chests")
+	var closest: ChestEntity = null
+	var min_dist := interaction_distance
+	for node in chests:
+		if node is ChestEntity and is_instance_valid(node):
+			var dist := global_position.distance_to(node.global_position)
+			if dist <= min_dist:
+				min_dist = dist
+				closest = node
+	return closest
 
 
 func trigger_drop_item() -> void:
@@ -561,12 +670,22 @@ func _on_animation_finished() -> void:
 		current_state = State.IDLE
 		impact_executed = false
 		animated_sprite.flip_h = false
+		animated_sprite.speed_scale = 1.0
+		_last_action_end_time = Time.get_ticks_msec()
 		
-		# Restore held item visual in case it was hidden during watering/harvest
+		# Restore held item visual in case it was hidden
 		_update_held_item_visuals()
 		
 		if is_ui_blocking():
 			play_idle_animation()
+			return
+
+		# Continuous hold-to-swing evaluation after cooldown
+		if _is_action_key_held() and current_held_item != null:
+			get_tree().create_timer(_current_item_cooldown).timeout.connect(func():
+				if not is_acting and _is_action_key_held() and not is_ui_blocking():
+					trigger_primary_action()
+			)
 			return
 
 		var direction := Input.get_vector(
@@ -647,16 +766,6 @@ func get_hotbar() -> Control:
 	return null
 
 
-func is_ui_blocking() -> bool:
-	if not get_tree():
-		return false
-	var inv_nodes := get_tree().get_nodes_in_group("inventory_ui")
-	for inv in inv_nodes:
-		if is_instance_valid(inv) and not inv.is_queued_for_deletion() and inv.get("is_open"):
-			return true
-	return false
-
-
 func get_closest_world_item() -> Area2D:
 	if not get_tree():
 		return null
@@ -665,11 +774,32 @@ func get_closest_world_item() -> Area2D:
 	var closest: Area2D = null
 	var min_dist := pickup_radius
 	
-	for node in items:
-		if node is Area2D and is_instance_valid(node) and not node.is_queued_for_deletion():
-			var dist := global_position.distance_to(node.global_position)
+	for item in items:
+		if item is Area2D and is_instance_valid(item) and not item.is_queued_for_deletion():
+			var dist := global_position.distance_to(item.global_position)
 			if dist <= min_dist:
 				min_dist = dist
-				closest = node
+				closest = item
 	
 	return closest
+
+
+func is_ui_blocking() -> bool:
+	if not get_tree():
+		return false
+	var inv_nodes := get_tree().get_nodes_in_group("inventory_ui")
+	for inv in inv_nodes:
+		if is_instance_valid(inv) and inv.get("is_open"):
+			return true
+	
+	var menu_nodes := get_tree().get_nodes_in_group("menu_ui")
+	for menu in menu_nodes:
+		if is_instance_valid(menu) and menu.get("is_open"):
+			return true
+	
+	var container_nodes := get_tree().get_nodes_in_group("container_ui")
+	for container in container_nodes:
+		if is_instance_valid(container) and container.get("is_open"):
+			return true
+	
+	return false

@@ -29,8 +29,11 @@ func _ready() -> void:
 	test_camera_follow_settings()
 	test_tree_cutting_and_wood_harvesting()
 	test_pickup_drop_cycle()
+	test_universal_item_swing_and_swoosh()
+	test_hold_to_swing_repeat_and_release()
+	test_rpg_chest_7_and_ui()
 	test_game_scene()
-	print("--- ALL NIGHT HARVEST MILESTONE 1 TESTS PASSED SUCCESSFULLY! ---")
+	print("--- ALL NIGHT HARVEST TESTS PASSED SUCCESSFULLY! ---")
 	get_tree().quit(0)
 
 
@@ -78,10 +81,14 @@ func test_inventory_system() -> void:
 	assert(inv.get_item_at(1)["item"].item_id == "stone_rock", "Slot 1 has stone")
 	assert(inv.get_item_at(1)["amount"] == 3, "Slot 1 has 3 stone")
 	
-	# Remove 1 wood
-	var removed = inv.remove_item_at(0, 1)
-	assert(removed.item_id == "wood_log", "Removed item is wood")
-	assert(inv.get_item_at(0)["amount"] == 14, "Slot 0 now has 14 wood")
+	# Test direct setters
+	inv.set_item_at(5, stone, 2)
+	assert(inv.get_item_at(5)["item"].item_id == "stone_rock", "Direct slot 5 set to stone")
+	assert(inv.get_item_at(5)["amount"] == 2, "Direct slot 5 amount is 2")
+	
+	inv.set_hotbar_item_at(2, wood, 7)
+	assert(inv.get_hotbar_item_at(2)["item"].item_id == "wood_log", "Hotbar slot 2 set to wood")
+	assert(inv.get_hotbar_item_at(2)["amount"] == 7, "Hotbar slot 2 amount is 7")
 	
 	inv.queue_free()
 	print("Inventory tests: OK")
@@ -479,8 +486,120 @@ func test_pickup_drop_cycle() -> void:
 	print("Pickup cycle tests: OK")
 
 
+func test_universal_item_swing_and_swoosh() -> void:
+	print("17. Testing Universal Item Swing & Directional Air-Swoosh...")
+	var world = Node2D.new()
+	add_child(world)
+	
+	var ken_scene = load("res://Scenes/ken.tscn")
+	var ken = ken_scene.instantiate()
+	world.add_child(ken)
+	
+	var sword = ItemDatabaseScript.get_item("iron_sword")
+	assert(sword.swing_speed_scale > 1.0, "Sword has high swing speed scale")
+	assert(sword.swoosh_scale.x >= 1.0, "Sword has configured swoosh scale")
+	
+	# Equip sword and swing RIGHT
+	ken._on_hotbar_slot_selected(0, sword)
+	ken.last_direction = Vector2.RIGHT
+	ken.trigger_primary_action()
+	assert(ken.is_acting == true, "Ken is acting with sword")
+	
+	# Frame 3 trigger (Impact & Swoosh)
+	ken.animated_sprite.frame = 3
+	ken._on_sprite_frame_changed()
+	assert(ken.swoosh_effect != null, "Ken has swoosh effect")
+	assert(ken.swoosh_effect.is_active == true, "Swoosh effect is active on impact frame")
+	assert(ken.swoosh_effect.current_direction == Vector2.RIGHT, "Swoosh points RIGHT")
+	
+	ken._on_animation_finished()
+	
+	# Equip axe and swing UP
+	var axe = ItemDatabaseScript.get_item("wood_axe")
+	ken._on_hotbar_slot_selected(0, axe)
+	ken.last_direction = Vector2.UP
+	ken.trigger_primary_action()
+	ken.animated_sprite.frame = 3
+	ken._on_sprite_frame_changed()
+	assert(ken.swoosh_effect.is_active == true, "Swoosh effect active on UP swing")
+	assert(ken.swoosh_effect.current_direction == Vector2.UP, "Swoosh points UP")
+	
+	ken._on_animation_finished()
+	world.queue_free()
+	print("Universal item swing & swoosh tests: OK")
+
+
+func test_hold_to_swing_repeat_and_release() -> void:
+	print("18. Testing Hold-to-Swing Repeat Logic & Release Stop...")
+	var world = Node2D.new()
+	add_child(world)
+	
+	var ken_scene = load("res://Scenes/ken.tscn")
+	var ken = ken_scene.instantiate()
+	world.add_child(ken)
+	
+	var sword = ItemDatabaseScript.get_item("iron_sword")
+	ken._on_hotbar_slot_selected(0, sword)
+	
+	# 1. Cooldown calculation
+	ken.trigger_primary_action()
+	assert(ken.is_acting == true, "Ken starts swing")
+	ken._on_animation_finished()
+	assert(ken.is_acting == false, "Ken finishes swing")
+	assert(ken._current_item_cooldown == sword.swing_cooldown, "Item cooldown correctly set")
+	
+	# 2. Empty-hand protection (No weapon equipped)
+	ken._on_hotbar_slot_selected(0, null)
+	ken.trigger_primary_action()
+	assert(ken.is_acting == false, "Ken does not swing when hand is empty")
+	
+	world.queue_free()
+	print("Hold-to-swing & empty-hand tests: OK")
+
+
+func test_rpg_chest_7_and_ui() -> void:
+	print("19. Testing RPG Chest #7 Slicing, Open/Close Animation & Transfers...")
+	var world = Node2D.new()
+	add_child(world)
+	
+	# 1. Texture Slicing Test
+	var tex = ItemDatabaseScript.get_rpg_chest_texture(7, 0)
+	assert(tex != null, "Chest 7 closed texture loaded")
+	assert(tex.region.size.x > 0 and tex.region.size.y > 0, "Texture region is valid")
+	
+	# 2. Chest Entity Test
+	var chest_scene = load("res://Scenes/Objects/chest.tscn")
+	var chest: ChestEntity = chest_scene.instantiate()
+	world.add_child(chest)
+	
+	var ken_scene = load("res://Scenes/ken.tscn")
+	var ken = ken_scene.instantiate()
+	ken.position = Vector2(0, 0)
+	world.add_child(ken)
+	
+	chest.position = Vector2(20, 0)
+	assert(chest.can_interact(ken) == true, "Chest can interact within 32px")
+	
+	# 3. Storage & Stacking Test (24 Slots)
+	assert(chest.storage_slots.size() == 24, "Chest has 24 storage slots")
+	var wood = ItemDatabaseScript.get_item("wood_log")
+	var leftover = chest.add_item(wood, 12)
+	assert(leftover == 0, "Stored 12 wood logs in chest")
+	assert(chest.get_item_at(0)["item"].item_id == "wood_log", "Chest slot 0 has wood")
+	assert(chest.get_item_at(0)["amount"] == 12, "Chest slot 0 count is 12")
+	
+	# 4. Open/Close sequence
+	chest.open_chest(ken)
+	assert(chest.is_open == true, "Chest opens")
+	chest.close_chest()
+	assert(chest.is_open == false, "Chest closes")
+	
+	world.queue_free()
+	print("RPG Chest #7 tests: OK")
+
+
 func test_game_scene() -> void:
-	print("17. Testing Game Scene Integration...")
+	print("20. Testing Game Scene Integration...")
 	var game_scene = load("res://Scenes/game.tscn")
 	var game = game_scene.instantiate()
 	add_child(game)
@@ -489,9 +608,14 @@ func test_game_scene() -> void:
 	assert(ui != null, "UI exists")
 	assert(ui.get_node_or_null("HUD") != null, "HUD exists")
 	assert(ui.get_node_or_null("Inventory") != null, "Inventory exists")
+	assert(ui.get_node_or_null("ChestUI") != null, "ChestUI exists")
 	
 	var ken = game.get_node_or_null("CharacterBody2D3")
 	assert(ken != null, "Ken exists")
 	
+	var chest = game.get_node_or_null("Chest")
+	assert(chest != null, "Chest exists in game scene")
+	
 	game.queue_free()
 	print("Game scene tests: OK")
+

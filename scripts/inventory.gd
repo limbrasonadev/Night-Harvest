@@ -237,6 +237,28 @@ func get_hotbar_item_at(slot_index: int) -> Dictionary:
 	return { "item": null, "amount": 0 }
 
 
+func set_item_at(slot_index: int, item_data: Resource, amount: int) -> void:
+	_init_slots()
+	if slot_index >= 0 and slot_index < slots.size():
+		if item_data == null or amount <= 0:
+			slots[slot_index] = { "item": null, "amount": 0 }
+		else:
+			slots[slot_index] = { "item": item_data, "amount": amount }
+		_update_slot_visuals()
+		inventory_changed.emit()
+
+
+func set_hotbar_item_at(slot_index: int, item_data: Resource, amount: int) -> void:
+	_init_slots()
+	if slot_index >= 0 and slot_index < hotbar_slots.size():
+		if item_data == null or amount <= 0:
+			hotbar_slots[slot_index] = { "item": null, "amount": 0 }
+		else:
+			hotbar_slots[slot_index] = { "item": item_data, "amount": amount }
+		_update_slot_visuals()
+		inventory_changed.emit()
+
+
 func remove_item_at(slot_index: int, amount: int = 1) -> Resource:
 	_init_slots()
 	if slot_index < 0 or slot_index >= slots.size():

@@ -2,6 +2,7 @@
 
 [ext_resource type="Texture2D" uid="uid://coikfrumwggib" path="res://Assets/Player/character.png" id="1_dix5s"]
 [ext_resource type="Script" uid="uid://py73i4w2f8th" path="res://Scenes/ken_idle_front.gd" id="1_tlxnr"]
+[ext_resource type="Script" path="res://scripts/swoosh_effect.gd" id="2_swoosh"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_idle_f0"]
 atlas = ExtResource("1_dix5s")
@@ -727,4 +728,7 @@ collision_mask = 3
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="ToolHitbox"]
 shape = SubResource("CircleShape2D_tool")
+
+[node name="SwooshEffect" type="Node2D" parent="."]
+script = ExtResource("2_swoosh")
 
