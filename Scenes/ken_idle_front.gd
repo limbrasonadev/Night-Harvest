@@ -41,6 +41,11 @@ var current_action_type: int = 0
 var impact_executed: bool = false
 var _current_action_timestamp: int = 0
 
+# Camera Middle-Mouse Drag Panning
+var is_panning_camera: bool = false
+var pan_drag_start_mouse_pos: Vector2 = Vector2.ZERO
+var pan_drag_start_camera_offset: Vector2 = Vector2.ZERO
+
 # Cooldown & Continuous Hold Tracking
 var _last_action_end_time: int = 0
 var _current_item_cooldown: float = 0.2
@@ -95,9 +100,15 @@ func _setup_camera() -> void:
 		camera.limit_bottom = camera_limit_bottom
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if is_acting and animated_sprite:
 		_sync_held_item_animation_frame(animated_sprite.frame)
+	
+	# Smoothly return camera offset to center when not actively dragging
+	if camera and not is_panning_camera and camera.offset != Vector2.ZERO:
+		camera.offset = camera.offset.lerp(Vector2.ZERO, delta * 12.0)
+		if camera.offset.length_squared() < 0.1:
+			camera.offset = Vector2.ZERO
 
 
 func _physics_process(_delta: float) -> void:
@@ -147,6 +158,22 @@ func _physics_process(_delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Middle-mouse camera drag panning (processed unless UI is blocking)
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_MIDDLE:
+			if event.pressed and not is_ui_blocking():
+				is_panning_camera = true
+				pan_drag_start_mouse_pos = event.position
+				pan_drag_start_camera_offset = camera.offset if camera else Vector2.ZERO
+			else:
+				is_panning_camera = false
+			return
+	elif event is InputEventMouseMotion and is_panning_camera:
+		if camera and not is_ui_blocking():
+			var delta_screen: Vector2 = event.position - pan_drag_start_mouse_pos
+			camera.offset = pan_drag_start_camera_offset - (delta_screen / camera.zoom)
+			return
+
 	if is_acting or is_ui_blocking():
 		return
 
@@ -800,6 +827,11 @@ func is_ui_blocking() -> bool:
 	var container_nodes := get_tree().get_nodes_in_group("container_ui")
 	for container in container_nodes:
 		if is_instance_valid(container) and container.get("is_open"):
+			return true
+	
+	var map_nodes := get_tree().get_nodes_in_group("map_ui")
+	for m in map_nodes:
+		if is_instance_valid(m) and m.get("is_open"):
 			return true
 	
 	return false

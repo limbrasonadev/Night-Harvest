@@ -8,6 +8,7 @@ const InventoryScript = preload("res://scripts/inventory.gd")
 const MenuScript = preload("res://scripts/menu.gd")
 const KenScript = preload("res://Scenes/ken_idle_front.gd")
 const MinimapScript = preload("res://scripts/minimap.gd")
+const FullMapScript = preload("res://scripts/full_map.gd")
 const HUDScript = preload("res://scripts/hud.gd")
 const TreeScript = preload("res://scripts/tree.gd")
 
@@ -19,6 +20,7 @@ func _ready() -> void:
 	test_inventory_to_hotbar_assignment()
 	test_hotbar_reactive_to_inventory()
 	test_minimap()
+	test_full_map()
 	test_hud()
 	test_menu()
 	test_ken()
@@ -27,6 +29,7 @@ func _ready() -> void:
 	test_action_state_locking_and_timing()
 	test_deterministic_drop_and_held_clear()
 	test_camera_follow_settings()
+	test_camera_panning()
 	test_tree_cutting_and_wood_harvesting()
 	test_pickup_drop_cycle()
 	test_universal_item_swing_and_swoosh()
@@ -194,6 +197,37 @@ func test_minimap() -> void:
 	minimap.queue_free()
 	dummy.queue_free()
 	print("Minimap tests: OK")
+
+
+func test_full_map() -> void:
+	print("6b. Testing Full Map System & POIs...")
+	var full_map_scene = load("res://Scenes/UI/full_map.tscn")
+	var full_map: FullMapUI = full_map_scene.instantiate()
+	add_child(full_map)
+	
+	var dummy = Node2D.new()
+	add_child(dummy)
+	dummy.position = Vector2(50, -50)
+	dummy.set("last_direction", Vector2.UP)
+	full_map.target = dummy
+	
+	# 1. Test Open / Close
+	assert(full_map.is_open == false, "Full Map initially closed")
+	full_map.open_map()
+	assert(full_map.is_open == true, "Full Map opens")
+	assert(full_map.visible == true, "Full Map becomes visible")
+	
+	# 2. Test World to Map coordinate conversion
+	var map_pos := full_map.world_to_map_position(dummy.position)
+	assert(map_pos != Vector2.ZERO, "World position converted to map position")
+	
+	# 3. Test Close
+	full_map.close_map()
+	assert(full_map.is_open == false, "Full Map closes")
+	
+	full_map.queue_free()
+	dummy.queue_free()
+	print("Full Map tests: OK")
 
 
 func test_hud() -> void:
@@ -385,6 +419,40 @@ func test_camera_follow_settings() -> void:
 	
 	ken.queue_free()
 	print("Camera follow settings tests: OK")
+
+
+func test_camera_panning() -> void:
+	print("14b. Testing Middle Mouse Camera Drag Panning...")
+	var ken_scene = load("res://Scenes/ken.tscn")
+	var ken = ken_scene.instantiate()
+	add_child(ken)
+	
+	var cam: Camera2D = ken.get_node_or_null("Camera2D")
+	assert(cam != null, "Ken has Camera2D")
+	
+	# Simulate Middle Mouse Drag Start
+	var press_event := InputEventMouseButton.new()
+	press_event.button_index = MOUSE_BUTTON_MIDDLE
+	press_event.pressed = true
+	press_event.position = Vector2(400, 300)
+	ken._unhandled_input(press_event)
+	assert(ken.is_panning_camera == true, "Camera panning active on middle press")
+	
+	# Simulate Motion
+	var motion_event := InputEventMouseMotion.new()
+	motion_event.position = Vector2(460, 300)
+	ken._unhandled_input(motion_event)
+	assert(cam.offset.x < 0, "Camera offset translated on drag")
+	
+	# Simulate Release
+	var release_event := InputEventMouseButton.new()
+	release_event.button_index = MOUSE_BUTTON_MIDDLE
+	release_event.pressed = false
+	ken._unhandled_input(release_event)
+	assert(ken.is_panning_camera == false, "Camera panning stopped on release")
+	
+	ken.queue_free()
+	print("Camera panning tests: OK")
 
 
 func test_tree_cutting_and_wood_harvesting() -> void:
@@ -609,6 +677,7 @@ func test_game_scene() -> void:
 	assert(ui.get_node_or_null("HUD") != null, "HUD exists")
 	assert(ui.get_node_or_null("Inventory") != null, "Inventory exists")
 	assert(ui.get_node_or_null("ChestUI") != null, "ChestUI exists")
+	assert(ui.get_node_or_null("FullMap") != null, "FullMap exists")
 	
 	var ken = game.get_node_or_null("CharacterBody2D3")
 	assert(ken != null, "Ken exists")
