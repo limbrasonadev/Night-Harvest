@@ -51,6 +51,11 @@ var _last_action_end_time: int = 0
 var _current_item_cooldown: float = 0.2
 var _hit_targets_this_swing: Array = []
 
+# --- Health System (Priority 1) ---
+var _player_stats: Node = null
+var _is_dead: bool = false
+var _pending_knockback: Vector2 = Vector2.ZERO
+
 # Natural directional hand offsets (aligned with character spritesheet)
 const HELD_OFFSETS := {
 	"down": { "pos": Vector2(6, 4), "z": 1, "flip": false, "rot": -20.0 },
@@ -112,6 +117,11 @@ func _process(delta: float) -> void:
 
 
 func _physics_process(_delta: float) -> void:
+	if _is_dead:
+		velocity = Vector2.ZERO
+		move_and_slide()
+		return
+	
 	# Failsafe: if held item is null but hotbar has an item, sync it
 	if current_held_item == null:
 		var hotbar = get_hotbar()
@@ -139,7 +149,7 @@ func _physics_process(_delta: float) -> void:
 		"move_down"
 	)
 
-	var is_running := Input.is_key_pressed(KEY_SHIFT) or Input.is_action_pressed("run")
+	var is_running := Input.is_key_pressed(KEY_SHIFT) or (InputMap.has_action("run") and Input.is_action_pressed("run"))
 	var active_speed := sprint_speed if is_running else walk_speed
 	velocity = direction * active_speed
 
@@ -154,10 +164,17 @@ func _physics_process(_delta: float) -> void:
 		play_idle_animation()
 
 	check_action_inputs()
+	# Apply knockback from damage
+	if _pending_knockback != Vector2.ZERO:
+		velocity += _pending_knockback
+		_pending_knockback = Vector2.ZERO
 	move_and_slide()
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _is_dead:
+		return
+	
 	# Middle-mouse camera drag panning (processed unless UI is blocking)
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_MIDDLE:
@@ -258,8 +275,44 @@ func trigger_primary_action() -> void:
 			trigger_watering()
 		ItemDataClass.ActionType.HARVEST:
 			trigger_harvest()
+		ItemDataClass.ActionType.PLANT:
+			trigger_plant()
 		_:
-			trigger_swing()
+			if current_held_item and current_held_item.get("item_type") == ItemDataClass.ItemType.SEED:
+				trigger_plant()
+			else:
+				trigger_swing()
+
+
+func trigger_plant() -> void:
+	var hotbar: Control = get_hotbar()
+	var inv: Control = get_inventory()
+	if not hotbar or not inv or not current_held_item:
+		return
+	
+	var active_slot: int = hotbar.get("selected_slot") if hotbar.get("selected_slot") != null else 0
+	var item_id: String = current_held_item.get("item_id") if current_held_item.get("item_id") != null else ""
+	
+	# Remove 1 seed from hotbar
+	var removed = null
+	if inv.has_method("remove_hotbar_item_at"):
+		removed = inv.call("remove_hotbar_item_at", active_slot, 1)
+	elif inv.has_method("remove_item_at"):
+		removed = inv.call("remove_item_at", active_slot, 1)
+	
+	if removed:
+		var anim_name := "harvest_front"
+		if last_direction == Vector2.UP:
+			anim_name = "harvest_back"
+		elif last_direction == Vector2.LEFT:
+			anim_name = "harvest_left"
+		elif last_direction == Vector2.RIGHT:
+			anim_name = "harvest_right"
+		_start_action(ItemDataClass.ActionType.PLANT, anim_name)
+		
+		if item_id == "carrot_seed":
+			_notify_event_bus("carrot_planted")
+		_notify_event_bus("crop_planted", [item_id])
 
 
 func trigger_swing() -> void:
@@ -580,6 +633,8 @@ func trigger_interact() -> void:
 			var amount: int = closest_item.get("amount") if closest_item.get("amount") != null else 1
 			var leftover: int = inv.add_item(item_data, amount)
 			if leftover == 0:
+				var picked_id: String = item_data.get("item_id") if item_data and item_data.get("item_id") != null else ""
+				_notify_event_bus("item_collected", [picked_id])
 				closest_item.queue_free()
 			else:
 				closest_item.set("amount", leftover)
@@ -693,12 +748,16 @@ func get_facing_direction(direction: Vector2) -> Vector2:
 
 func _on_animation_finished() -> void:
 	if is_acting:
+		var completed_action := current_action_type
 		is_acting = false
 		current_state = State.IDLE
 		impact_executed = false
 		animated_sprite.flip_h = false
 		animated_sprite.speed_scale = 1.0
 		_last_action_end_time = Time.get_ticks_msec()
+		
+		if completed_action == ItemDataClass.ActionType.WATER:
+			_notify_event_bus("crop_watered")
 		
 		# Restore held item visual in case it was hidden
 		_update_held_item_visuals()
@@ -835,3 +894,72 @@ func is_ui_blocking() -> bool:
 			return true
 	
 	return false
+
+
+# ==============================================================================
+# HEALTH SYSTEM (Priority 1)
+# ==============================================================================
+
+func _find_player_stats() -> Node:
+	var stats_nodes := get_tree().get_nodes_in_group("player_stats")
+	for node in stats_nodes:
+		if is_instance_valid(node):
+			return node
+	return null
+
+
+## Called by zombies/enemies to damage the player.
+## Signature: (amount, hit_direction, knockback) to match existing combat conventions.
+func take_damage(amount: int, hit_direction: Vector2 = Vector2.ZERO, knockback: float = 0.0) -> void:
+	if _is_dead:
+		return
+	if not _player_stats:
+		_player_stats = _find_player_stats()
+	if not _player_stats:
+		return
+	
+	var actual_damage: int = _player_stats.take_damage(amount)
+	if actual_damage <= 0:
+		return
+	
+	# Hit flash (red tint → restore)
+	_play_hit_flash()
+	
+	# Knockback (applied next physics frame)
+	if hit_direction != Vector2.ZERO and knockback > 0.0:
+		_pending_knockback = hit_direction.normalized() * knockback
+	
+	# Check for death
+	if _player_stats.is_dead:
+		_on_player_died()
+
+
+func _play_hit_flash() -> void:
+	if not animated_sprite:
+		return
+	var tween := create_tween()
+	animated_sprite.modulate = Color(1.5, 0.3, 0.3, 1.0)
+	tween.tween_property(animated_sprite, "modulate", Color.WHITE, 0.2)
+
+
+func _on_player_died() -> void:
+	_is_dead = true
+	is_acting = false
+	velocity = Vector2.ZERO
+	if animated_sprite:
+		animated_sprite.modulate = Color(0.5, 0.3, 0.3, 1.0)
+		animated_sprite.stop()
+
+
+func _notify_event_bus(signal_name: String, args: Array = []) -> void:
+	var bus_nodes := get_tree().get_nodes_in_group("event_bus")
+	for bus in bus_nodes:
+		if is_instance_valid(bus) and bus.has_signal(signal_name):
+			match args.size():
+				0:
+					bus.emit_signal(signal_name)
+				1:
+					bus.emit_signal(signal_name, args[0])
+				2:
+					bus.emit_signal(signal_name, args[0], args[1])
+			break

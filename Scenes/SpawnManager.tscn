@@ -1,0 +1,40 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/SpawnManager.gd" id="1_spawn_mgr"]
+
+[node name="SpawnManager" type="Node2D"]
+script = ExtResource("1_spawn_mgr")
+
+[node name="ZombieSpawnPoints" type="Node2D" parent="."]
+
+[node name="SpawnPoint01" type="Marker2D" parent="ZombieSpawnPoints" groups=["zombie_spawn_point"]]
+position = Vector2(280, -200)
+
+[node name="SpawnPoint02" type="Marker2D" parent="ZombieSpawnPoints" groups=["zombie_spawn_point"]]
+position = Vector2(-280, -200)
+
+[node name="SpawnPoint03" type="Marker2D" parent="ZombieSpawnPoints" groups=["zombie_spawn_point"]]
+position = Vector2(350, 180)
+
+[node name="SpawnPoint04" type="Marker2D" parent="ZombieSpawnPoints" groups=["zombie_spawn_point"]]
+position = Vector2(-260, 260)
+
+[node name="SpawnPoint05" type="Marker2D" parent="ZombieSpawnPoints" groups=["zombie_spawn_point"]]
+position = Vector2(120, 320)
+
+[node name="AnimalSpawnPoints" type="Node2D" parent="."]
+
+[node name="SpawnPoint01" type="Marker2D" parent="AnimalSpawnPoints" groups=["animal_spawn_point"]]
+position = Vector2(-60, 50)
+
+[node name="SpawnPoint02" type="Marker2D" parent="AnimalSpawnPoints" groups=["animal_spawn_point"]]
+position = Vector2(60, -40)
+
+[node name="SpawnPoint03" type="Marker2D" parent="AnimalSpawnPoints" groups=["animal_spawn_point"]]
+position = Vector2(-200, 150)
+
+[node name="SpawnPoint04" type="Marker2D" parent="AnimalSpawnPoints" groups=["animal_spawn_point"]]
+position = Vector2(300, 300)
+
+[node name="SpawnPoint05" type="Marker2D" parent="AnimalSpawnPoints" groups=["animal_spawn_point"]]
+position = Vector2(400, -80)

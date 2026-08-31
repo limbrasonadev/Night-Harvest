@@ -42,9 +42,33 @@ func _ready() -> void:
 
 
 func _load_styles() -> void:
-	_style_selected = load("res://Scenes/UI/inventory.tscn::StyleBoxFlat_slot_selected")
-	_style_hotbar = load("res://Scenes/UI/inventory.tscn::StyleBoxFlat_hotbar_slot")
-	_style_backpack = load("res://Scenes/UI/inventory.tscn::StyleBoxFlat_slot")
+	if _style_selected == null:
+		var s_sel := StyleBoxFlat.new()
+		s_sel.bg_color = Color(0.2, 0.16, 0.12, 0.9)
+		s_sel.border_width_left = 2
+		s_sel.border_width_top = 2
+		s_sel.border_width_right = 2
+		s_sel.border_width_bottom = 2
+		s_sel.border_color = Color(1.0, 0.85, 0.2, 1.0)
+		_style_selected = s_sel
+	if _style_hotbar == null:
+		var s_hot := StyleBoxFlat.new()
+		s_hot.bg_color = Color(0.12, 0.09, 0.07, 0.85)
+		s_hot.border_width_left = 1
+		s_hot.border_width_top = 1
+		s_hot.border_width_right = 1
+		s_hot.border_width_bottom = 1
+		s_hot.border_color = Color(0.6, 0.45, 0.25, 0.8)
+		_style_hotbar = s_hot
+	if _style_backpack == null:
+		var s_bp := StyleBoxFlat.new()
+		s_bp.bg_color = Color(0.15, 0.11, 0.08, 0.85)
+		s_bp.border_width_left = 1
+		s_bp.border_width_top = 1
+		s_bp.border_width_right = 1
+		s_bp.border_width_bottom = 1
+		s_bp.border_color = Color(0.35, 0.25, 0.15, 0.6)
+		_style_backpack = s_bp
 
 
 func _init_slots() -> void:

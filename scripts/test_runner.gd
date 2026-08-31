@@ -36,6 +36,14 @@ func _ready() -> void:
 	test_hold_to_swing_repeat_and_release()
 	test_rpg_chest_7_and_ui()
 	test_game_scene()
+	test_health_and_defense_system()
+	test_game_clock_and_periods()
+	test_event_bus_and_daily_quests()
+	test_environment_lighting()
+	test_zombie_spawner_and_marker2d()
+	test_zombie_ai_and_combat()
+	test_4_direction_movement_and_facing()
+	test_spawn_manager_scene_and_spawning()
 	print("--- ALL NIGHT HARVEST TESTS PASSED SUCCESSFULLY! ---")
 	get_tree().quit(0)
 
@@ -687,4 +695,335 @@ func test_game_scene() -> void:
 	
 	game.queue_free()
 	print("Game scene tests: OK")
+
+
+func test_health_and_defense_system() -> void:
+	print("21. Testing Priority 1: Health, Defense & Death System...")
+	var stats_script = load("res://scripts/player_stats.gd")
+	var stats = stats_script.new()
+	add_child(stats)
+	
+	assert(stats.max_health == 100, "Max HP is 100")
+	assert(stats.current_health == 100, "Initial HP is 100")
+	assert(stats.current_defense == 0, "Initial defense is 0")
+	
+	# Zombie base damage is 3. At 0 defense, damage should be 3 (~33 hits to die)
+	var dmg = stats.take_damage(3)
+	assert(dmg == 3, "Zombie deals 3 damage at 0 defense")
+	assert(stats.current_health == 97, "HP is 97 after hit")
+	
+	# Cooldown invulnerability: immediately taking damage again should deal 0
+	var dmg2 = stats.take_damage(3)
+	assert(dmg2 == 0, "Damage cooldown prevents consecutive frame damage")
+	assert(stats.current_health == 97, "HP remains 97 during cooldown")
+	
+	# Test defense reduction: formula max(1, base - defense/20)
+	stats._is_invulnerable = false
+	stats.set_defense(20) # 20 / 20 = 1 reduction -> damage is 3 - 1 = 2
+	var dmg_def = stats.take_damage(3)
+	assert(dmg_def == 2, "Defense reduces damage by 1 (deals 2)")
+	assert(stats.current_health == 95, "HP is 95")
+	
+	# Test minimum damage clamp (always >= 1)
+	stats._is_invulnerable = false
+	stats.set_defense(100)
+	var dmg_min = stats.take_damage(1)
+	assert(dmg_min == 1, "Defense never makes player completely immune (min 1)")
+	
+	# Test death
+	stats._is_invulnerable = false
+	var died := [false]
+	stats.player_died.connect(func(): died[0] = true)
+	stats.take_damage(1000)
+	assert(stats.current_health == 0, "HP is 0 after fatal damage")
+	assert(stats.is_dead == true, "Player is in dead state")
+	assert(died[0] == true, "player_died signal fired")
+	
+	stats.queue_free()
+	print("Health & Defense tests: OK")
+
+
+func test_game_clock_and_periods() -> void:
+	print("22. Testing Priority 2: Game Clock & Day/Night Progression...")
+	var clock_script = load("res://scripts/game_clock.gd")
+	var clock = clock_script.new()
+	add_child(clock)
+	
+	assert(clock.start_hour == 6, "Clock starts at 6 AM")
+	assert(clock.get_period_name() == "MORNING", "6 AM is Morning")
+	assert(clock.get_time_string() == "06:00 AM", "Time string is 06:00 AM")
+	assert(clock.is_night() == false, "Morning is not night")
+	
+	# Advance to 12 PM (Afternoon)
+	clock.current_hour = 12
+	clock.current_minute = 0
+	clock.current_period = clock._calculate_period()
+	assert(clock.get_period_name() == "AFTERNOON", "12 PM is Afternoon")
+	assert(clock.get_time_string() == "12:00 PM", "Time string is 12:00 PM")
+	
+	# Advance to 5 PM (Sunset)
+	clock.current_hour = 17
+	clock.current_period = clock._calculate_period()
+	assert(clock.get_period_name() == "SUNSET", "5 PM is Sunset")
+	
+	# Advance to 7 PM (Night)
+	clock.current_hour = 19
+	clock.current_period = clock._calculate_period()
+	assert(clock.get_period_name() == "NIGHT", "7 PM is Night")
+	assert(clock.is_night() == true, "7 PM is night")
+	
+	# Countdown test
+	clock.current_hour = 15
+	clock.current_minute = 30
+	assert(clock.get_nightfall_countdown() == "03:30", "Countdown to 7 PM is 03:30 at 3:30 PM")
+	
+	# Day roll-over test
+	clock.current_day = 1
+	clock.current_hour = 23
+	clock.current_minute = 59
+	clock._advance_minute()
+	assert(clock.current_day == 2, "Day advances to 2 at midnight")
+	assert(clock.current_hour == 0 and clock.current_minute == 0, "Time resets to 00:00")
+	
+	clock.queue_free()
+	print("Game Clock tests: OK")
+
+
+func test_event_bus_and_daily_quests() -> void:
+	print("23. Testing Priority 3: EventBus & Real-Time Quests...")
+	var bus_script = load("res://scripts/event_bus.gd")
+	var bus = bus_script.new()
+	bus.name = "EventBus"
+	add_child(bus)
+	
+	var qm_script = load("res://scripts/quest_manager.gd")
+	var qm = qm_script.new()
+	qm.name = "QuestManager"
+	add_child(qm)
+	qm._connect_event_bus()
+	
+	# Create a controlled test quest: Plant 3 Carrots
+	var q_data_script = load("res://scripts/quest_data.gd")
+	var quest = q_data_script.new("test_carrot", "Plant 3 Carrots", "carrot_planted", 3)
+	quest.xp_reward = 50
+	quest.gold_reward = 100
+	qm.active_quests.clear()
+	qm.active_quests.append(quest)
+	
+	assert(quest.current_count == 0, "Quest starts at 0/3")
+	assert(quest.is_completed == false, "Quest not completed")
+	
+	# Emit carrot_planted event 1
+	bus.carrot_planted.emit()
+	assert(quest.current_count == 1, "Quest progress is 1/3")
+	assert(quest.is_completed == false, "Quest not completed at 1/3")
+	
+	# Emit carrot_planted event 2
+	bus.carrot_planted.emit()
+	assert(quest.current_count == 2, "Quest progress is 2/3")
+	
+	# Emit carrot_planted event 3 (Target reached!)
+	var quest_finished := [false]
+	qm.quest_completed.connect(func(qid): quest_finished[0] = true)
+	bus.carrot_planted.emit()
+	assert(quest.current_count == 3, "Quest progress reached 3/3")
+	assert(quest.is_completed == true, "Quest marked completed")
+	assert(quest_finished[0] == true, "quest_completed signal fired")
+	
+	qm.queue_free()
+	bus.queue_free()
+	print("EventBus & Quests tests: OK")
+
+
+func test_environment_lighting() -> void:
+	print("24. Testing Priority 4: Environment Lighting...")
+	var env_script = load("res://scripts/environment_manager.gd")
+	var env = env_script.new()
+	add_child(env)
+	env._setup()
+	
+	assert(env.morning_color == Color(1.0, 1.0, 1.0, 1.0), "Morning color is bright neutral")
+	assert(env.night_color.b > env.night_color.r, "Night color has cool blue-purple tone")
+	
+	env.queue_free()
+	print("Environment lighting tests: OK")
+
+
+func test_zombie_spawner_and_marker2d() -> void:
+	print("25. Testing Priority 5: Zombie Spawning & Marker2D Editor Points...")
+	var spawner_script = load("res://scripts/SpawnManager.gd")
+	var spawner = spawner_script.new()
+	add_child(spawner)
+	
+	# Create a mock ZombieSpawnPoints container with Marker2D nodes
+	var container = Node2D.new()
+	container.name = "ZombieSpawnPoints"
+	spawner.add_child(container)
+	
+	var m1 = Marker2D.new()
+	m1.name = "ZombieSpawnPoint01"
+	m1.position = Vector2(200, 200)
+	m1.add_to_group("zombie_spawn_point")
+	container.add_child(m1)
+	
+	var m2 = Marker2D.new()
+	m2.name = "ZombieSpawnPoint02"
+	m2.position = Vector2(-200, -200)
+	m2.add_to_group("zombie_spawn_point")
+	container.add_child(m2)
+	
+	var points = spawner.get_zombie_spawn_points()
+	assert(points.has(m1), "Spawner discovered Marker2D point 1")
+	assert(points.has(m2), "Spawner discovered Marker2D point 2")
+	
+	container.queue_free()
+	spawner.queue_free()
+	print("Zombie Spawner & Marker2D tests: OK")
+
+
+func test_zombie_ai_and_combat() -> void:
+	print("26. Testing Priority 6: Zombie AI, Health Bars & Combat...")
+	var zombie_scene = load("res://Scenes/zombie.tscn")
+	var zombie_a = zombie_scene.instantiate()
+	var zombie_b = zombie_scene.instantiate()
+	add_child(zombie_a)
+	add_child(zombie_b)
+	
+	# Verify initial state
+	assert(zombie_a.max_health == 100, "Zombie A has 100 max HP")
+	assert(zombie_a.current_health == 100, "Zombie A starts with 100 HP")
+	assert(zombie_b.current_health == 100, "Zombie B starts with 100 HP")
+	assert(zombie_a.health_bar != null, "Zombie A has health bar node")
+	assert(zombie_a.health_bar.value == 100.0, "Health bar shows 100")
+	
+	# Attack Zombie A: 30 damage
+	zombie_a.take_damage(30, Vector2.RIGHT, 20.0)
+	assert(zombie_a.current_health == 70, "Zombie A HP is 70 after 30 damage")
+	assert(zombie_a.health_bar.value == 70.0, "Zombie A health bar updated immediately to 70")
+	
+	# Crucial independence check: Zombie B must NOT be affected!
+	assert(zombie_b.current_health == 100, "Zombie B is completely unaffected (still 100 HP)")
+	assert(zombie_b.health_bar.value == 100.0, "Zombie B health bar remains 100")
+	
+	# Fatal damage to Zombie A
+	zombie_a.take_damage(100)
+	assert(zombie_a.current_health == 0, "Zombie A HP reaches 0")
+	assert(zombie_a.is_dead == true, "Zombie A enters dead state")
+	assert(zombie_a.health_bar.visible == false, "Zombie A health bar disappears on death")
+	
+	zombie_a.queue_free()
+	zombie_b.queue_free()
+	print("Zombie AI & Combat tests: OK")
+
+
+func test_4_direction_movement_and_facing() -> void:
+	print("27. Testing 4-Direction Movement, Directional Facing & Zombie Attack...")
+	# 1. Test Animal Cardinal Movement
+	var chicken_scene = load("res://Scenes/chicken.tscn")
+	var chicken = chicken_scene.instantiate()
+	add_child(chicken)
+	
+	chicken.start_walking()
+	assert(chicken.direction in [Vector2.UP, Vector2.DOWN, Vector2.LEFT, Vector2.RIGHT], "Chicken moves only cardinally")
+	assert(chicken.velocity.x == 0 or chicken.velocity.y == 0, "No diagonal velocity on chicken")
+	
+	# Test chicken sprite facing
+	chicken._update_facing(Vector2.LEFT)
+	assert(chicken.animated_sprite.flip_h == true, "Chicken faces LEFT with flip_h true")
+	chicken._update_facing(Vector2.RIGHT)
+	assert(chicken.animated_sprite.flip_h == false, "Chicken faces RIGHT with flip_h false")
+	
+	# 2. Test Zombie Cardinal Movement & face_target()
+	var zombie_scene = load("res://Scenes/zombie.tscn")
+	var zombie = zombie_scene.instantiate()
+	add_child(zombie)
+	
+	# Test cardinal calculation
+	assert(zombie.get_cardinal_direction(Vector2(50, 10)) == Vector2.RIGHT, "Primary X right is Vector2.RIGHT")
+	assert(zombie.get_cardinal_direction(Vector2(-50, 10)) == Vector2.LEFT, "Primary X left is Vector2.LEFT")
+	assert(zombie.get_cardinal_direction(Vector2(10, 50)) == Vector2.DOWN, "Primary Y down is Vector2.DOWN")
+	assert(zombie.get_cardinal_direction(Vector2(10, -50)) == Vector2.UP, "Primary Y up is Vector2.UP")
+	
+	# Test face_target on target node
+	var dummy_target = Node2D.new()
+	add_child(dummy_target)
+	
+	# Target to the right
+	dummy_target.global_position = zombie.global_position + Vector2(40, 5)
+	zombie.face_target(dummy_target)
+	assert(zombie.facing_direction == Vector2.RIGHT, "Zombie faces RIGHT towards target")
+	assert(zombie.animated_sprite.flip_h == false, "Zombie sprite flip_h is false when facing RIGHT")
+	
+	# Target to the left
+	dummy_target.global_position = zombie.global_position + Vector2(-40, 5)
+	zombie.face_target(dummy_target)
+	assert(zombie.facing_direction == Vector2.LEFT, "Zombie faces LEFT towards target")
+	assert(zombie.animated_sprite.flip_h == true, "Zombie sprite flip_h is true when facing LEFT")
+	
+	# Target directly above
+	dummy_target.global_position = zombie.global_position + Vector2(0, -40)
+	zombie.face_target(dummy_target)
+	assert(zombie.facing_direction == Vector2.UP, "Zombie faces UP towards target")
+	
+	# Target directly below
+	dummy_target.global_position = zombie.global_position + Vector2(0, 40)
+	zombie.face_target(dummy_target)
+	assert(zombie.facing_direction == Vector2.DOWN, "Zombie faces DOWN towards target")
+	
+	# 3. Test Zombie Wander is Cardinal Only
+	zombie._enter_state(zombie.State.WANDER)
+	assert(zombie._wander_direction in [Vector2.UP, Vector2.DOWN, Vector2.LEFT, Vector2.RIGHT], "Zombie wander direction is cardinal")
+	assert(zombie.velocity.x == 0 or zombie.velocity.y == 0, "Zombie wander has no diagonal movement")
+	
+	dummy_target.queue_free()
+	zombie.queue_free()
+	chicken.queue_free()
+	print("4-Direction movement & facing tests: OK")
+
+
+func test_spawn_manager_scene_and_spawning() -> void:
+	print("28. Testing Dedicated SpawnManager.tscn & Spawning Rules...")
+	var sm_scene = load("res://Scenes/SpawnManager.tscn")
+	var sm = sm_scene.instantiate()
+	add_child(sm)
+	
+	# Verify structure
+	var z_points = sm.get_zombie_spawn_points()
+	var a_points = sm.get_animal_spawn_points()
+	assert(z_points.size() == 5, "Found 5 ZombieSpawnPoints in SpawnManager.tscn")
+	assert(a_points.size() == 5, "Found 5 AnimalSpawnPoints in SpawnManager.tscn")
+	
+	# Test zombie spawning
+	sm.max_zombies = 3
+	sm.min_player_distance_for_zombies = 0.0 # Disable distance filter for unit test
+	var spawned_zombies = sm.spawn_zombies()
+	assert(spawned_zombies.size() == 3, "Spawned exactly 3 zombies (max_zombies = 3)")
+	
+	# Check no duplicate positions
+	var positions: Array[Vector2] = []
+	for z in spawned_zombies:
+		assert(not positions.has(z.global_position), "No two zombies share the exact same spawn point")
+		positions.append(z.global_position)
+	
+	# Test clearing zombies
+	sm.clear_zombies()
+	assert(sm._spawned_zombies.is_empty(), "All spawned zombies cleared")
+	
+	# Test animal spawning
+	sm.max_animals = 4
+	var spawned_animals = sm.spawn_animals()
+	assert(spawned_animals.size() == 4, "Spawned exactly 4 animals (max_animals = 4)")
+	
+	var a_positions: Array[Vector2] = []
+	for a in spawned_animals:
+		assert(not a_positions.has(a.global_position), "No two animals share the exact same spawn point")
+		a_positions.append(a.global_position)
+	
+	sm.clear_animals()
+	assert(sm._spawned_animals.is_empty(), "All spawned animals cleared")
+	
+	sm.queue_free()
+	print("SpawnManager.tscn tests: OK")
+
+
 

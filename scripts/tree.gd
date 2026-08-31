@@ -81,6 +81,13 @@ func _destroy_tree() -> void:
 	is_dead = true
 	tree_destroyed.emit()
 	
+	# Notify quest system
+	var bus_nodes := get_tree().get_nodes_in_group("event_bus")
+	for bus in bus_nodes:
+		if is_instance_valid(bus) and bus.has_signal("tree_cut"):
+			bus.tree_cut.emit()
+			break
+	
 	# Spawn exactly 4 wood logs
 	_spawn_wood_drops()
 	

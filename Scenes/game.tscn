@@ -28,6 +28,10 @@
 [ext_resource type="PackedScene" uid="uid://bch3st0bj3ct1" path="res://Scenes/Objects/chest.tscn" id="23_chest"]
 [ext_resource type="PackedScene" path="res://Scenes/UI/chest_ui.tscn" id="24_chest_ui"]
 [ext_resource type="PackedScene" path="res://Scenes/UI/full_map.tscn" id="25_full_map"]
+[ext_resource type="PackedScene" uid="uid://dus3t318i8fvh" path="res://Scenes/pig.tscn" id="29_8m3t6"]
+[ext_resource type="PackedScene" uid="uid://be6iv5l286syb" path="res://Scenes/cow.tscn" id="30_ese38"]
+[ext_resource type="PackedScene" uid="uid://dbh5m34mw70bu" path="res://Scenes/sheep.tscn" id="31_oeip8"]
+[ext_resource type="PackedScene" path="res://Scenes/SpawnManager.tscn" id="32_spawn_mgr"]
 
 [sub_resource type="CompressedTexture2D" id="CompressedTexture2D_7nbq1"]
 load_path = "res://.godot/imported/fulltile.png-1432b0539f56b0007db83fecf35c664f.ctex"
@@ -6471,7 +6475,6 @@ position = Vector2(21, -115)
 [node name="UI" type="CanvasLayer" parent="." unique_id=1940278383]
 
 [node name="HUD" parent="UI" unique_id=315441563 instance=ExtResource("18_hud")]
-metadata/_edit_lock_ = true
 
 [node name="Inventory" parent="UI" unique_id=1394110535 instance=ExtResource("19_inv")]
 metadata/_edit_lock_ = true
@@ -6484,3 +6487,71 @@ visible = false
 
 [node name="FullMap" parent="UI" unique_id=981273412 instance=ExtResource("25_full_map")]
 visible = false
+
+[node name="CharacterBody2D4" parent="." unique_id=776749810 instance=ExtResource("29_8m3t6")]
+position = Vector2(-371, 206)
+
+[node name="CharacterBody2D5" parent="." unique_id=1948461948 instance=ExtResource("29_8m3t6")]
+position = Vector2(-282, 209)
+
+[node name="CharacterBody2D6" parent="." unique_id=387315187 instance=ExtResource("29_8m3t6")]
+position = Vector2(-334, 173)
+
+[node name="CharacterBody2D7" parent="." unique_id=2089343579 instance=ExtResource("29_8m3t6")]
+position = Vector2(-247, 152)
+
+[node name="CharacterBody2D8" parent="." unique_id=606680047 instance=ExtResource("29_8m3t6")]
+position = Vector2(-320, 136)
+
+[node name="CharacterBody2D9" parent="." unique_id=518390854 instance=ExtResource("29_8m3t6")]
+position = Vector2(-282, 170)
+
+[node name="CharacterBody2D10" parent="." unique_id=287697363 instance=ExtResource("30_ese38")]
+position = Vector2(315, 319)
+
+[node name="CharacterBody2D11" parent="." unique_id=1732776498 instance=ExtResource("30_ese38")]
+position = Vector2(367, 317)
+
+[node name="CharacterBody2D12" parent="." unique_id=2102694488 instance=ExtResource("30_ese38")]
+position = Vector2(349, 343)
+
+[node name="CharacterBody2D13" parent="." unique_id=2070947457 instance=ExtResource("30_ese38")]
+position = Vector2(392, 332)
+
+[node name="CharacterBody2D14" parent="." unique_id=1549198222 instance=ExtResource("30_ese38")]
+position = Vector2(515, 316)
+
+[node name="CharacterBody2D15" parent="." unique_id=55488424 instance=ExtResource("30_ese38")]
+position = Vector2(380, 363)
+
+[node name="CharacterBody2D16" parent="." unique_id=846345927 instance=ExtResource("30_ese38")]
+position = Vector2(422, 292)
+
+[node name="CharacterBody2D17" parent="." unique_id=792627375 instance=ExtResource("31_oeip8")]
+position = Vector2(450, -62)
+
+[node name="CharacterBody2D18" parent="." unique_id=951836225 instance=ExtResource("31_oeip8")]
+position = Vector2(427, -55)
+
+[node name="CharacterBody2D19" parent="." unique_id=98369894 instance=ExtResource("31_oeip8")]
+position = Vector2(432, -42)
+
+[node name="CharacterBody2D20" parent="." unique_id=1128620267 instance=ExtResource("31_oeip8")]
+position = Vector2(447, -28)
+
+[node name="CharacterBody2D21" parent="." unique_id=1492225035 instance=ExtResource("31_oeip8")]
+position = Vector2(513, -64)
+
+[node name="CharacterBody2D22" parent="." unique_id=1449855750 instance=ExtResource("16_nnt18")]
+position = Vector2(-38, 59)
+
+[node name="CharacterBody2D23" parent="." unique_id=1210779356 instance=ExtResource("16_nnt18")]
+position = Vector2(-57, 39)
+
+[node name="CharacterBody2D24" parent="." unique_id=1932143077 instance=ExtResource("16_nnt18")]
+position = Vector2(41, 56)
+
+[node name="SpawnManager" parent="." unique_id=1007991252 instance=ExtResource("32_spawn_mgr")]
+
+[node name="SpawnManager2" parent="." unique_id=1963010040 instance=ExtResource("32_spawn_mgr")]
+position = Vector2(-220, 200)
