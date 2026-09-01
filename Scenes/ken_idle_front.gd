@@ -26,12 +26,26 @@ const SwooshEffectClass = preload("res://scripts/swoosh_effect.gd")
 @export var camera_limit_right: int = 800
 @export var camera_limit_bottom: int = 800
 
+@export_group("Torch Settings")
+@export var placement_distance: float = 24.0
+@export var torch_light_scale: float = 2.4 ## Light radius size (higher = larger illuminated circle)
+@export var torch_night_energy: float = 1.5 ## Brightness at night
+@export var torch_day_energy: float = 1.2 ## Brightness during day / dusk
+@export var torch_light_color: Color = Color(1.0, 0.78, 0.48, 1.0) ## Light tint color
+@export var torch_flicker_intensity: float = 0.06 ## Flame flicker variation (0.0 = steady light)
+
 @onready var animated_sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var held_item_anchor: Marker2D = $HeldItemAnchor
 @onready var held_item_sprite: Sprite2D = $HeldItemAnchor/HeldItemSprite
+@onready var held_torch_flame: AnimatedSprite2D = get_node_or_null("HeldItemAnchor/HeldTorchFlame")
+@onready var torch_light: PointLight2D = get_node_or_null("HeldItemAnchor/TorchLight")
 @onready var tool_hitbox: Area2D = get_node_or_null("ToolHitbox")
 @onready var camera: Camera2D = get_node_or_null("Camera2D")
 @onready var swoosh_effect: SwooshEffect = get_node_or_null("SwooshEffect")
+
+var _torch_flicker_time: float = 0.0
+var _torch_base_energy: float = 1.0
+var _game_clock: Node = null
 
 var current_state: State = State.IDLE
 var last_direction: Vector2 = Vector2.DOWN
@@ -81,6 +95,7 @@ func _ready() -> void:
 	
 	_setup_camera()
 	call_deferred("_connect_hotbar")
+	call_deferred("_connect_game_clock")
 
 
 func _connect_hotbar() -> void:
@@ -116,11 +131,17 @@ func _process(delta: float) -> void:
 			camera.offset = Vector2.ZERO
 
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	if _is_dead:
 		velocity = Vector2.ZERO
 		move_and_slide()
 		return
+	
+	# Torch light natural flame flicker
+	if torch_light and torch_light.enabled:
+		_torch_flicker_time += delta * 7.0
+		var flicker := sin(_torch_flicker_time) * torch_flicker_intensity + sin(_torch_flicker_time * 2.3) * (torch_flicker_intensity * 0.65)
+		torch_light.energy = _torch_base_energy + flicker
 	
 	# Failsafe: if held item is null but hotbar has an item, sync it
 	if current_held_item == null:
@@ -204,6 +225,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		trigger_interact()
 	elif event.is_action_pressed("drop_item") or (event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_Q):
 		trigger_drop_item()
+	elif event.is_action_pressed("place_torch") or (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT):
+		trigger_place_held_torch()
 
 
 func check_action_inputs() -> bool:
@@ -223,6 +246,9 @@ func check_action_inputs() -> bool:
 	elif Input.is_action_just_pressed("drop_item"):
 		trigger_drop_item()
 		return true
+	elif Input.is_action_just_pressed("place_torch") or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+		if trigger_place_held_torch():
+			return true
 
 	# 2. Continuous Hold-to-Swing check
 	if _is_action_key_held() and _is_cooldown_ready():
@@ -676,15 +702,124 @@ func trigger_drop_item() -> void:
 		else:
 			removed_item = inv.call("remove_item_at", active_slot, 1)
 		if removed_item:
-			var world_item: Area2D = WorldItemScene.instantiate()
+			var item_id: String = removed_item.get("item_id") if removed_item.get("item_id") != null else ""
+			var target_pos := global_position + (last_direction * 22.0)
+			
+			# Validate placement against solid walls/obstacles
+			var space_state := get_world_2d().direct_space_state
+			var query := PhysicsPointQueryParameters2D.new()
+			query.position = target_pos
+			query.collision_mask = 1 # Solid world obstacles
+			var hits := space_state.intersect_point(query)
+			if not hits.is_empty():
+				target_pos = global_position + (last_direction * 10.0)
+			
 			var spawn_parent: Node = get_parent() if get_parent() else self
-			spawn_parent.add_child(world_item)
-			world_item.global_position = global_position + (last_direction * 18.0)
-			world_item.call("set_item", removed_item, 1)
+			if item_id == "torch":
+				var torch_scene = load("res://Scenes/Torch.tscn")
+				var torch_node: Area2D = torch_scene.instantiate()
+				spawn_parent.add_child(torch_node)
+				torch_node.global_position = target_pos
+			else:
+				var world_item: Area2D = WorldItemScene.instantiate()
+				spawn_parent.add_child(world_item)
+				world_item.global_position = target_pos
+				world_item.call("set_item", removed_item, 1)
+			
 			var item_name: String = removed_item.get("display_name") if removed_item.get("display_name") != null else "Item"
 			print("Ken: Dropped 1 ", item_name)
 	else:
 		print("Ken: Selected hotbar slot is empty, nothing to drop")
+
+
+## Places the currently equipped Torch into the world via Right-Click or place_torch action.
+func trigger_place_held_torch() -> bool:
+	if is_acting or is_ui_blocking():
+		return false
+	
+	if not current_held_item or current_held_item.get("item_id") != "torch":
+		return false
+	
+	var hotbar: Control = get_hotbar()
+	var inv: Control = get_inventory()
+	if not inv and not hotbar:
+		return false
+	
+	var active_slot: int = 0
+	if hotbar and hotbar.get("selected_slot") != null:
+		active_slot = hotbar.get("selected_slot")
+	var target_pos := global_position + (last_direction * placement_distance)
+	
+	# Validate placement against solid walls / obstacles
+	var space_state := get_world_2d().direct_space_state
+	
+	# Exclude player's own physics body & child areas from blocking placement
+	var exclude_rids: Array[RID] = [get_rid()]
+	if tool_hitbox:
+		exclude_rids.append(tool_hitbox.get_rid())
+	
+	# 1. Point check at target location
+	var point_query := PhysicsPointQueryParameters2D.new()
+	point_query.position = target_pos
+	point_query.collision_mask = 1 # Solid world obstacles / walls
+	point_query.exclude = exclude_rids
+	point_query.collide_with_areas = false
+	point_query.collide_with_bodies = true
+	var point_hits := space_state.intersect_point(point_query)
+	if not point_hits.is_empty():
+		print("Ken: Cannot place torch here (location blocked).")
+		return false
+	
+	# 2. Raycast check from player to target location to prevent placing through walls
+	var ray_start := global_position + (last_direction * 8.0)
+	var ray_query := PhysicsRayQueryParameters2D.create(ray_start, target_pos)
+	ray_query.collision_mask = 1
+	ray_query.exclude = exclude_rids
+	ray_query.collide_with_areas = false
+	ray_query.collide_with_bodies = true
+	var ray_hits := space_state.intersect_ray(ray_query)
+	if not ray_hits.is_empty():
+		print("Ken: Cannot place torch through an obstacle.")
+		return false
+	
+	# Remove 1 torch from hotbar / inventory
+	var removed_item: Resource = null
+	if inv and inv.has_method("remove_hotbar_item_at"):
+		removed_item = inv.call("remove_hotbar_item_at", active_slot, 1)
+	elif inv and inv.has_method("remove_item_at"):
+		removed_item = inv.call("remove_item_at", active_slot, 1)
+	
+	if not removed_item:
+		return false
+	
+	# Instantiate placed torch in world
+	var torch_scene = load("res://Scenes/Torch.tscn")
+	var torch_node: Area2D = torch_scene.instantiate()
+	var spawn_parent: Node = get_parent() if get_parent() else self
+	spawn_parent.add_child(torch_node)
+	torch_node.global_position = target_pos
+	
+	print("Ken: Placed torch at ", target_pos)
+	
+	# Re-sync hotbar slot to check if torches remain
+	var slot_data: Dictionary = {}
+	if inv and inv.has_method("get_hotbar_item_at"):
+		slot_data = inv.call("get_hotbar_item_at", active_slot)
+	elif inv and inv.has_method("get_item_at"):
+		slot_data = inv.call("get_item_at", active_slot)
+	elif hotbar and hotbar.has_method("get_slot_data"):
+		slot_data = hotbar.call("get_slot_data", active_slot)
+	
+	var remaining_item: Resource = slot_data.get("item", null) if slot_data != null else null
+	var remaining_amount: int = slot_data.get("amount", 0) if slot_data != null else 0
+	
+	if remaining_amount <= 0 or remaining_item == null:
+		current_held_item = null
+	else:
+		current_held_item = remaining_item
+	
+	_update_held_item_visuals()
+	return true
 
 
 # ==============================================================================
@@ -697,23 +832,40 @@ func _on_hotbar_slot_selected(_slot_index: int, item_data: Resource) -> void:
 
 
 func _update_held_item_visuals() -> void:
-	if not held_item_sprite:
+	if not held_item_anchor:
 		return
 	
-	if current_held_item:
-		var tex: Texture2D = current_held_item.get("held_texture")
-		if not tex:
-			tex = current_held_item.get("icon")
-		held_item_sprite.texture = tex
-		held_item_sprite.visible = (tex != null)
-		_update_held_item_position()
+	var is_torch: bool = (current_held_item != null and current_held_item.get("item_id") == "torch")
+	
+	if is_torch:
+		if held_item_sprite:
+			held_item_sprite.visible = false
+		if held_torch_flame:
+			held_torch_flame.visible = true
+			if not held_torch_flame.is_playing():
+				held_torch_flame.play("flicker")
+	elif current_held_item:
+		if held_torch_flame:
+			held_torch_flame.visible = false
+		if held_item_sprite:
+			var tex: Texture2D = current_held_item.get("held_texture")
+			if not tex:
+				tex = current_held_item.get("icon")
+			held_item_sprite.texture = tex
+			held_item_sprite.visible = (tex != null)
 	else:
-		held_item_sprite.texture = null
-		held_item_sprite.visible = false
+		if held_torch_flame:
+			held_torch_flame.visible = false
+		if held_item_sprite:
+			held_item_sprite.texture = null
+			held_item_sprite.visible = false
+	
+	_update_held_item_position()
+	_update_torch_light_state()
 
 
 func _update_held_item_position() -> void:
-	if not held_item_anchor or not held_item_sprite:
+	if not held_item_anchor:
 		return
 	
 	var dir_key := _get_direction_key()
@@ -721,8 +873,60 @@ func _update_held_item_position() -> void:
 	
 	held_item_anchor.position = cfg["pos"]
 	held_item_anchor.z_index = cfg["z"]
-	held_item_sprite.flip_h = cfg["flip"]
-	held_item_sprite.rotation_degrees = cfg["rot"]
+	
+	if held_item_sprite:
+		held_item_sprite.flip_h = cfg["flip"]
+		held_item_sprite.rotation_degrees = cfg["rot"]
+	
+	if held_torch_flame:
+		held_torch_flame.flip_h = cfg["flip"]
+		held_torch_flame.rotation_degrees = cfg["rot"]
+
+
+func _update_torch_light_state() -> void:
+	if not torch_light:
+		return
+	var is_torch: bool = (current_held_item != null and current_held_item.get("item_id") == "torch")
+	if not is_torch:
+		torch_light.enabled = false
+		return
+	
+	# Always illuminate while holding a torch!
+	torch_light.enabled = true
+	torch_light.texture_scale = torch_light_scale
+	torch_light.color = torch_light_color
+	
+	var is_night_time := true
+	if not _game_clock:
+		_game_clock = _find_game_clock()
+	if _game_clock and _game_clock.has_method("is_night"):
+		is_night_time = _game_clock.is_night()
+	
+	# Rich, warm source of light
+	if is_night_time:
+		_torch_base_energy = torch_night_energy
+	else:
+		_torch_base_energy = torch_day_energy
+
+
+func _connect_game_clock() -> void:
+	_game_clock = _find_game_clock()
+	if _game_clock and _game_clock.has_signal("time_updated"):
+		if not _game_clock.time_updated.is_connected(_on_clock_time_updated):
+			_game_clock.time_updated.connect(_on_clock_time_updated)
+	_update_torch_light_state()
+
+
+func _find_game_clock() -> Node:
+	var clocks := get_tree().get_nodes_in_group("game_clock")
+	for c in clocks:
+		if is_instance_valid(c):
+			return c
+	return null
+
+
+func _on_clock_time_updated(_hour: int, _minute: int) -> void:
+	_update_torch_light_state()
 
 
 func _get_direction_key() -> String:
@@ -825,30 +1029,44 @@ func play_idle_animation() -> void:
 func get_inventory() -> Control:
 	if not get_tree():
 		return null
-	var nodes := get_tree().get_nodes_in_group("inventory_ui")
-	for node in nodes:
-		if is_instance_valid(node) and not node.is_queued_for_deletion():
-			return node as Control
+	var parent := get_parent()
+	if parent:
+		var inv = parent.find_child("Inventory", true, false)
+		if inv and is_instance_valid(inv) and not inv.is_queued_for_deletion():
+			return inv as Control
 	
 	if get_tree().root:
 		var inv = get_tree().root.find_child("Inventory", true, false)
-		if inv and is_instance_valid(inv):
+		if inv and is_instance_valid(inv) and not inv.is_queued_for_deletion():
 			return inv as Control
+	
+	var nodes := get_tree().get_nodes_in_group("inventory_ui")
+	for i in range(nodes.size() - 1, -1, -1):
+		var node = nodes[i]
+		if is_instance_valid(node) and not node.is_queued_for_deletion():
+			return node as Control
 	return null
 
 
 func get_hotbar() -> Control:
 	if not get_tree():
 		return null
-	var nodes := get_tree().get_nodes_in_group("hotbar_ui")
-	for node in nodes:
-		if is_instance_valid(node) and not node.is_queued_for_deletion():
-			return node as Control
+	var parent := get_parent()
+	if parent:
+		var hb = parent.find_child("Hotbar", true, false)
+		if hb and is_instance_valid(hb) and not hb.is_queued_for_deletion():
+			return hb as Control
 	
 	if get_tree().root:
 		var hb = get_tree().root.find_child("Hotbar", true, false)
-		if hb and is_instance_valid(hb):
+		if hb and is_instance_valid(hb) and not hb.is_queued_for_deletion():
 			return hb as Control
+	
+	var nodes := get_tree().get_nodes_in_group("hotbar_ui")
+	for i in range(nodes.size() - 1, -1, -1):
+		var node = nodes[i]
+		if is_instance_valid(node) and not node.is_queued_for_deletion():
+			return node as Control
 	return null
 
 

@@ -7,24 +7,23 @@ class_name SpawnManager
 ##
 ## Scene Structure:
 ## SpawnManager (Node2D)
-## ├── ZombieSpawnPoints (Node2D)
+## ├── ZombieSpawnPoint (Marker2D) [EXACTLY ONE DESIGNATED SPAWN POINT]
+## ├── AnimalSpawnPoints (Node2D)
 ## │   ├── SpawnPoint01 (Marker2D)
 ## │   └── ...
-## └── AnimalSpawnPoints (Node2D)
-##     ├── SpawnPoint01 (Marker2D)
-##     └── ...
+## └── ZombieSpawnTimer (Timer, 60s)
 ##
 ## Features:
-## - Spawns strictly at designated Marker2D points
-## - No two enemies/animals spawn at the exact same point during one cycle
-## - Configurable limits (max_zombies, max_animals)
-## - Modular methods: spawn_zombies(), spawn_animals(), clear_zombies(), clear_animals()
-## - Day/Night integration with GameClock
+## - Exactly ONE designated ZombieSpawnPoint (movable in Godot editor)
+## - Zero random coordinate generation or multiple spawn points for zombies
+## - 10 zombies spawned every 60 seconds from the SAME point
+## - Uses Godot's Timer node for interval tracking
+## - Day/Night integration: begins 60s waves at night, stops at day
 
 @export_group("Zombie Spawning")
 @export var zombie_scene: PackedScene = preload("res://Scenes/zombie.tscn")
-@export var max_zombies: int = 5
-@export var min_player_distance_for_zombies: float = 120.0
+@export var zombies_per_wave: int = 10
+@export var spawn_interval: float = 60.0
 
 @export_group("Animal Spawning")
 @export var animal_scene: PackedScene = preload("res://Scenes/chicken.tscn")
@@ -36,14 +35,28 @@ class_name SpawnManager
 ]
 @export var max_animals: int = 5
 
-# --- Internal State ---
+# --- Internal State & Node References ---
 var _game_clock: Node = null
 var _spawned_zombies: Array[Node2D] = []
 var _spawned_animals: Array[Node2D] = []
 
+@onready var zombie_spawn_point: Marker2D = get_node_or_null("ZombieSpawnPoint")
+@onready var zombie_spawn_timer: Timer = get_node_or_null("ZombieSpawnTimer")
+
 
 func _ready() -> void:
 	add_to_group("spawn_manager")
+	
+	# Setup ZombieSpawnTimer
+	if not zombie_spawn_timer:
+		zombie_spawn_timer = Timer.new()
+		zombie_spawn_timer.name = "ZombieSpawnTimer"
+		add_child(zombie_spawn_timer)
+	
+	zombie_spawn_timer.wait_time = spawn_interval
+	if not zombie_spawn_timer.timeout.is_connected(_on_zombie_spawn_timer_timeout):
+		zombie_spawn_timer.timeout.connect(_on_zombie_spawn_timer_timeout)
+	
 	call_deferred("_connect_game_clock")
 
 
@@ -58,29 +71,37 @@ func _connect_game_clock() -> void:
 		_game_clock.night_started.connect(_on_night_started)
 		_game_clock.night_ended.connect(_on_night_ended)
 		
-		# Initial spawn based on current period
+		# Initial state based on current period
 		if _game_clock.is_night():
-			spawn_zombies()
+			_start_zombie_spawning()
 		else:
+			_stop_zombie_spawning()
 			spawn_animals()
 	else:
-		# Fallback initial animal spawn
+		# Fallback when running standalone scene
 		spawn_animals()
 
 
 # ==============================================================================
-# SPAWN POINT DISCOVERY
+# SPAWN POINT ACCESSORS
 # ==============================================================================
 
-## Returns all Marker2D / Node2D spawn points under ZombieSpawnPoints
+## Returns the single designated ZombieSpawnPoint Marker2D
+func get_zombie_spawn_point() -> Marker2D:
+	if zombie_spawn_point and is_instance_valid(zombie_spawn_point):
+		return zombie_spawn_point
+	var pt = get_node_or_null("ZombieSpawnPoint")
+	if pt and pt is Marker2D:
+		return pt
+	return null
+
+
+## Backward-compatible array accessor returning the single designated spawn point
 func get_zombie_spawn_points() -> Array[Node2D]:
-	var points: Array[Node2D] = []
-	var container := get_node_or_null("ZombieSpawnPoints")
-	if container:
-		for child in container.get_children():
-			if child is Node2D:
-				points.append(child)
-	return points
+	var pt := get_zombie_spawn_point()
+	if pt:
+		return [pt]
+	return []
 
 
 ## Returns all Marker2D / Node2D spawn points under AnimalSpawnPoints
@@ -95,54 +116,49 @@ func get_animal_spawn_points() -> Array[Node2D]:
 
 
 # ==============================================================================
-# ZOMBIE SPAWNING
+# CONTROLLED ZOMBIE SPAWNING (10 Zombies every 60s from ONE Location)
 # ==============================================================================
 
-## Spawns zombies at available ZombieSpawnPoints up to max_zombies.
-## Guarantees no two zombies spawn at the exact same point during this cycle.
+## Spawns exactly zombies_per_wave (10) zombies from the single ZombieSpawnPoint.
+## Zero randomized coordinates. All zombies spawn from the same designated point.
 func spawn_zombies() -> Array[Node2D]:
 	if not zombie_scene:
 		return []
 	
-	_clean_tracked_zombies()
-	var available_points := get_zombie_spawn_points()
-	if available_points.is_empty():
+	var pt := get_zombie_spawn_point()
+	if not pt:
+		push_warning("SpawnManager: No ZombieSpawnPoint found!")
 		return []
 	
-	# Filter points by distance from player to avoid unfair sudden pop-ins
-	var player := _get_player()
-	var filtered_points: Array[Node2D] = []
-	for pt in available_points:
-		if not is_instance_valid(pt):
-			continue
-		if player and is_instance_valid(player):
-			if pt.global_position.distance_to(player.global_position) < min_player_distance_for_zombies:
-				continue
-		filtered_points.append(pt)
-	
-	# If all points are too close, fallback to all points
-	if filtered_points.is_empty():
-		filtered_points = available_points.duplicate()
-	
-	# Randomly shuffle so selections are unpredictable
-	filtered_points.shuffle()
-	
-	# Determine how many zombies to spawn (respecting max_zombies)
-	var slots_available := maxi(0, max_zombies - _spawned_zombies.size())
-	var spawn_count := mini(slots_available, filtered_points.size())
-	
-	var newly_spawned: Array[Node2D] = []
 	var target_parent := _get_entity_parent()
+	var newly_spawned: Array[Node2D] = []
 	
-	for i in range(spawn_count):
-		var spawn_pt: Node2D = filtered_points[i]
+	for i in range(zombies_per_wave):
 		var zombie = zombie_scene.instantiate()
 		target_parent.add_child(zombie)
-		zombie.global_position = spawn_pt.global_position
+		zombie.global_position = pt.global_position
 		_spawned_zombies.append(zombie)
 		newly_spawned.append(zombie)
 	
+	print("[SpawnManager] Wave spawned: %d zombies at %s" % [newly_spawned.size(), pt.global_position])
 	return newly_spawned
+
+
+func _on_zombie_spawn_timer_timeout() -> void:
+	spawn_zombies()
+
+
+func _start_zombie_spawning() -> void:
+	if zombie_spawn_timer:
+		zombie_spawn_timer.wait_time = spawn_interval
+		zombie_spawn_timer.start()
+	# Spawn initial wave of 10 zombies upon night arrival
+	spawn_zombies()
+
+
+func _stop_zombie_spawning() -> void:
+	if zombie_spawn_timer:
+		zombie_spawn_timer.stop()
 
 
 ## Cleans up active spawned zombies
@@ -159,14 +175,11 @@ func clear_zombies() -> void:
 # ==============================================================================
 
 ## Spawns animals at available AnimalSpawnPoints up to max_animals.
-## Guarantees no two animals spawn at the exact same point during this cycle.
 func spawn_animals() -> Array[Node2D]:
 	_clean_tracked_animals()
 	var available_points := get_animal_spawn_points()
 	if available_points.is_empty():
 		return []
-	
-	available_points.shuffle()
 	
 	var slots_available := maxi(0, max_animals - _spawned_animals.size())
 	var spawn_count := mini(slots_available, available_points.size())
@@ -176,11 +189,9 @@ func spawn_animals() -> Array[Node2D]:
 	
 	for i in range(spawn_count):
 		var spawn_pt: Node2D = available_points[i]
-		
-		# Pick animal scene (from list if available, else animal_scene)
 		var chosen_scene: PackedScene = animal_scene
 		if not animal_scenes.is_empty():
-			chosen_scene = animal_scenes[randi() % animal_scenes.size()]
+			chosen_scene = animal_scenes[i % animal_scenes.size()]
 		
 		if not chosen_scene:
 			continue
@@ -208,12 +219,11 @@ func clear_animals() -> void:
 # ==============================================================================
 
 func _on_night_started() -> void:
-	# Night arrives: spawn zombies
-	spawn_zombies()
+	_start_zombie_spawning()
 
 
 func _on_night_ended() -> void:
-	# Morning arrives: clear zombies and spawn daytime animals
+	_stop_zombie_spawning()
 	clear_zombies()
 	spawn_animals()
 

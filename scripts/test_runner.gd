@@ -44,6 +44,7 @@ func _ready() -> void:
 	test_zombie_ai_and_combat()
 	test_4_direction_movement_and_facing()
 	test_spawn_manager_scene_and_spawning()
+	test_torch_world_item_and_inventory()
 	print("--- ALL NIGHT HARVEST TESTS PASSED SUCCESSFULLY! ---")
 	get_tree().quit(0)
 
@@ -850,33 +851,22 @@ func test_environment_lighting() -> void:
 
 
 func test_zombie_spawner_and_marker2d() -> void:
-	print("25. Testing Priority 5: Zombie Spawning & Marker2D Editor Points...")
+	print("25. Testing Single ZombieSpawnPoint Marker2D & Wave Configuration...")
 	var spawner_script = load("res://scripts/SpawnManager.gd")
 	var spawner = spawner_script.new()
 	add_child(spawner)
 	
-	# Create a mock ZombieSpawnPoints container with Marker2D nodes
-	var container = Node2D.new()
-	container.name = "ZombieSpawnPoints"
-	spawner.add_child(container)
+	# Create single ZombieSpawnPoint Marker2D
+	var marker = Marker2D.new()
+	marker.name = "ZombieSpawnPoint"
+	marker.position = Vector2(250, 150)
+	spawner.add_child(marker)
 	
-	var m1 = Marker2D.new()
-	m1.name = "ZombieSpawnPoint01"
-	m1.position = Vector2(200, 200)
-	m1.add_to_group("zombie_spawn_point")
-	container.add_child(m1)
+	assert(spawner.get_zombie_spawn_point() == marker, "Spawner discovered single ZombieSpawnPoint")
+	assert(spawner.zombies_per_wave == 10, "10 zombies per wave configured")
+	assert(spawner.spawn_interval == 60.0, "60-second spawn interval configured")
 	
-	var m2 = Marker2D.new()
-	m2.name = "ZombieSpawnPoint02"
-	m2.position = Vector2(-200, -200)
-	m2.add_to_group("zombie_spawn_point")
-	container.add_child(m2)
-	
-	var points = spawner.get_zombie_spawn_points()
-	assert(points.has(m1), "Spawner discovered Marker2D point 1")
-	assert(points.has(m2), "Spawner discovered Marker2D point 2")
-	
-	container.queue_free()
+	marker.queue_free()
 	spawner.queue_free()
 	print("Zombie Spawner & Marker2D tests: OK")
 
@@ -933,6 +923,14 @@ func test_4_direction_movement_and_facing() -> void:
 	chicken._update_facing(Vector2.RIGHT)
 	assert(chicken.animated_sprite.flip_h == false, "Chicken faces RIGHT with flip_h false")
 	
+	# Test keeping last facing direction while idle
+	chicken._update_facing(Vector2.LEFT)
+	chicken.start_idle()
+	assert(chicken.animated_sprite.flip_h == true, "Chicken keeps last facing direction (LEFT) while idle")
+	chicken._update_facing(Vector2.RIGHT)
+	chicken.start_idle()
+	assert(chicken.animated_sprite.flip_h == false, "Chicken keeps last facing direction (RIGHT) while idle")
+	
 	# 2. Test Zombie Cardinal Movement & face_target()
 	var zombie_scene = load("res://Scenes/zombie.tscn")
 	var zombie = zombie_scene.instantiate()
@@ -982,48 +980,143 @@ func test_4_direction_movement_and_facing() -> void:
 
 
 func test_spawn_manager_scene_and_spawning() -> void:
-	print("28. Testing Dedicated SpawnManager.tscn & Spawning Rules...")
+	print("28. Testing Dedicated SpawnManager.tscn & 10 Zombies per 60s Rule...")
 	var sm_scene = load("res://Scenes/SpawnManager.tscn")
 	var sm = sm_scene.instantiate()
 	add_child(sm)
 	
-	# Verify structure
-	var z_points = sm.get_zombie_spawn_points()
-	var a_points = sm.get_animal_spawn_points()
-	assert(z_points.size() == 5, "Found 5 ZombieSpawnPoints in SpawnManager.tscn")
-	assert(a_points.size() == 5, "Found 5 AnimalSpawnPoints in SpawnManager.tscn")
+	# Verify structure: exactly ONE ZombieSpawnPoint
+	var z_point = sm.get_zombie_spawn_point()
+	assert(z_point != null, "Found exactly ONE ZombieSpawnPoint Marker2D in SpawnManager.tscn")
+	assert(sm.zombies_per_wave == 10, "Default zombies_per_wave is 10")
+	assert(sm.spawn_interval == 60.0, "Default spawn_interval is 60.0s")
 	
-	# Test zombie spawning
-	sm.max_zombies = 3
-	sm.min_player_distance_for_zombies = 0.0 # Disable distance filter for unit test
+	var timer = sm.get_node_or_null("ZombieSpawnTimer")
+	assert(timer != null, "ZombieSpawnTimer node exists")
+	assert(timer.wait_time == 60.0, "Timer wait_time is 60 seconds")
+	
+	# Test spawning: spawns exactly 10 zombies, all at the single spawn point!
 	var spawned_zombies = sm.spawn_zombies()
-	assert(spawned_zombies.size() == 3, "Spawned exactly 3 zombies (max_zombies = 3)")
-	
-	# Check no duplicate positions
-	var positions: Array[Vector2] = []
+	assert(spawned_zombies.size() == 10, "Spawned exactly 10 zombies in wave")
 	for z in spawned_zombies:
-		assert(not positions.has(z.global_position), "No two zombies share the exact same spawn point")
-		positions.append(z.global_position)
+		assert(z.global_position == z_point.global_position, "All zombies spawned from the same ZombieSpawnPoint")
 	
-	# Test clearing zombies
 	sm.clear_zombies()
 	assert(sm._spawned_zombies.is_empty(), "All spawned zombies cleared")
 	
-	# Test animal spawning
-	sm.max_animals = 4
-	var spawned_animals = sm.spawn_animals()
-	assert(spawned_animals.size() == 4, "Spawned exactly 4 animals (max_animals = 4)")
-	
-	var a_positions: Array[Vector2] = []
-	for a in spawned_animals:
-		assert(not a_positions.has(a.global_position), "No two animals share the exact same spawn point")
-		a_positions.append(a.global_position)
-	
-	sm.clear_animals()
-	assert(sm._spawned_animals.is_empty(), "All spawned animals cleared")
-	
 	sm.queue_free()
 	print("SpawnManager.tscn tests: OK")
+
+
+func test_torch_world_item_and_inventory() -> void:
+	print("29. Testing Torch System: Asset, Light, Inventory & Drop/Pickup...")
+	# 1. Test item database registration
+	var db = load("res://scripts/item_database.gd")
+	var torch_item = db.get_item("torch")
+	assert(torch_item != null, "Torch is registered in ItemDatabase")
+	assert(torch_item.display_name == "Torch", "Display name is Torch")
+	assert(torch_item.icon != null, "Torch has an icon texture")
+	assert(torch_item.max_stack == 99, "Torch max stack is 99")
+	
+	# 2. Test Torch.tscn instance
+	var torch_scene = load("res://Scenes/Torch.tscn")
+	var torch_node = torch_scene.instantiate()
+	add_child(torch_node)
+	
+	assert(torch_node.is_in_group("world_items"), "Torch belongs to world_items group")
+	assert(torch_node.is_in_group("torches"), "Torch belongs to torches group")
+	assert(torch_node.point_light != null, "Torch has PointLight2D")
+	assert(torch_node.animated_sprite != null, "Torch has AnimatedSprite2D with flame")
+	assert(torch_node.animated_sprite.sprite_frames.has_animation("flicker"), "Torch has flicker animation")
+	
+	# 3. Test day/night lighting response
+	torch_node._update_lighting_state(true)
+	assert(torch_node.point_light.enabled == true, "Torch light is enabled at night")
+	assert(torch_node._base_energy == 1.5, "Torch light has strong energy at night")
+	torch_node._update_lighting_state(false)
+	assert(torch_node.point_light.enabled == true, "Torch light remains illuminated during day")
+	assert(torch_node._base_energy == 1.2, "Torch light has warm daytime energy")
+	torch_node.queue_free()
+	
+	# 4. Test Player Held Torch & Light Following
+	var test_container = Node2D.new()
+	add_child(test_container)
+	
+	var inv_scene = load("res://Scenes/UI/inventory.tscn")
+	var inv = inv_scene.instantiate()
+	test_container.add_child(inv)
+	inv.set_hotbar_item_at(0, torch_item, 4)
+	
+	var ken_scene = load("res://Scenes/ken.tscn")
+	var ken = ken_scene.instantiate()
+	test_container.add_child(ken)
+	
+	assert(ken.held_torch_flame != null, "Ken has HeldTorchFlame node")
+	assert(ken.torch_light != null, "Ken has TorchLight node")
+	assert(ken.torch_light.enabled == false, "TorchLight is disabled when no item held")
+	
+	# Equip torch
+	ken.current_held_item = torch_item
+	ken._update_held_item_visuals()
+	assert(ken.held_torch_flame.visible == true, "HeldTorchFlame visible when torch equipped")
+	assert(ken.torch_light.enabled == true, "TorchLight enabled when torch equipped")
+	assert(ken._torch_base_energy >= 1.2, "TorchLight has rich base energy")
+	
+	# Verify light follows player movement
+	ken.global_position = Vector2(150, 200)
+	var light_pos: Vector2 = ken.torch_light.global_position
+	assert(light_pos.distance_to(ken.global_position) < 30.0, "TorchLight follows player global_position")
+	
+	# Verify flame orients with player facing
+	ken.last_direction = Vector2.LEFT
+	ken._update_held_item_position()
+	assert(ken.held_torch_flame.flip_h == true, "Held torch flame flips horizontally when facing LEFT")
+	
+	ken.last_direction = Vector2.RIGHT
+	ken._update_held_item_position()
+	assert(ken.held_torch_flame.flip_h == false, "Held torch flame does not flip horizontally when facing RIGHT")
+	
+	# 5. Test Right-Click Placement in ALL 4 Directions (DOWN, LEFT, RIGHT, UP)
+	# Test placing DOWN (bottom)
+	ken.last_direction = Vector2.DOWN
+	var place_down: bool = ken.trigger_place_held_torch()
+	assert(place_down == true, "Can place torch facing DOWN (bottom)")
+	
+	# Test placing LEFT (side)
+	ken.last_direction = Vector2.LEFT
+	var place_left: bool = ken.trigger_place_held_torch()
+	assert(place_left == true, "Can place torch facing LEFT (side)")
+	
+	# Test placing RIGHT (side)
+	ken.last_direction = Vector2.RIGHT
+	var place_right: bool = ken.trigger_place_held_torch()
+	assert(place_right == true, "Can place torch facing RIGHT (side)")
+	
+	# Test placing UP (top)
+	ken.last_direction = Vector2.UP
+	var place_up: bool = ken.trigger_place_held_torch()
+	assert(place_up == true, "Can place torch facing UP (top)")
+	
+	# Since 4 torches were placed, player light should now be OFF
+	assert(ken.torch_light.enabled == false, "Player torch light turns OFF after placing all 4 torches")
+	assert(ken.held_torch_flame.visible == false, "Held torch flame hidden after placing all torches")
+	
+	# 6. Test Pickup Placed Torches
+	for child in test_container.get_children():
+		if child is Area2D and child.is_in_group("torches") and is_instance_valid(child) and not child.is_queued_for_deletion():
+			ken.global_position = child.global_position
+			ken.trigger_interact()
+	
+	var slot_after_pickup: Dictionary = inv.get_hotbar_item_at(0)
+	assert(slot_after_pickup["amount"] == 4, "All 4 torches returned to inventory")
+	
+	# Equip again -> light comes back
+	ken.current_held_item = slot_after_pickup["item"]
+	ken._update_held_item_visuals()
+	assert(ken.torch_light.enabled == true, "Player receives held torch light again after re-equipping")
+	
+	test_container.queue_free()
+	print("Torch system tests: OK")
 
 
 

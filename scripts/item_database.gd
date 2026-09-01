@@ -214,3 +214,24 @@ static func _init_database_if_needed() -> void:
 	hoe.swoosh_color = Color(0.9, 0.85, 0.7, 0.85)
 	hoe.knockback_force = 25.0
 	_items["hoe"] = hoe
+	
+	# Torch (Utility / Light source)
+	var torch_tex: Texture2D = null
+	if ResourceLoader.exists("res://Assets/Items/torch.png"):
+		torch_tex = load("res://Assets/Items/torch.png")
+	if not torch_tex and FileAccess.file_exists("res://Assets/Items/torch.png"):
+		var img := Image.load_from_file("res://Assets/Items/torch.png")
+		if img:
+			torch_tex = ImageTexture.create_from_image(img)
+	
+	var torch = ItemDataClass.new(
+		"torch",
+		"Torch",
+		ItemDataClass.ItemType.TOOL,
+		torch_tex,
+		99,
+		ItemDataClass.ActionType.NONE
+	)
+	torch.description = "A wooden torch that provides warm light in the darkness."
+	torch.usable = false
+	_items["torch"] = torch
