@@ -46,8 +46,11 @@ const SwooshEffectClass = preload("res://scripts/swoosh_effect.gd")
 var _torch_flicker_time: float = 0.0
 var _torch_base_energy: float = 1.0
 var _game_clock: Node = null
+var _is_unhoeing: bool = false
 
 var current_state: State = State.IDLE
+
+
 var last_direction: Vector2 = Vector2.DOWN
 var is_acting: bool = false
 var current_held_item: Resource = null
@@ -94,8 +97,16 @@ func _ready() -> void:
 		play_idle_animation()
 	
 	_setup_camera()
+	
+	if not InputMap.has_action("unhoe_soil"):
+		InputMap.add_action("unhoe_soil")
+		var mb := InputEventMouseButton.new()
+		mb.button_index = MOUSE_BUTTON_RIGHT
+		InputMap.action_add_event("unhoe_soil", mb)
+	
 	call_deferred("_connect_hotbar")
 	call_deferred("_connect_game_clock")
+
 
 
 func _connect_hotbar() -> void:
@@ -225,8 +236,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		trigger_interact()
 	elif event.is_action_pressed("drop_item") or (event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_Q):
 		trigger_drop_item()
+	elif event.is_action_pressed("unhoe_soil"):
+		trigger_unhoe()
 	elif event.is_action_pressed("place_torch") or (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT):
-		trigger_place_held_torch()
+		var is_holding_hoe: bool = current_held_item != null and (current_held_item.get("action_type") == ItemDataClass.ActionType.TILL or current_held_item.get("item_id") == "hoe")
+		if is_holding_hoe:
+			trigger_unhoe()
+		else:
+			trigger_place_held_torch()
 
 
 func check_action_inputs() -> bool:
@@ -246,9 +263,19 @@ func check_action_inputs() -> bool:
 	elif Input.is_action_just_pressed("drop_item"):
 		trigger_drop_item()
 		return true
-	elif Input.is_action_just_pressed("place_torch") or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
-		if trigger_place_held_torch():
+	elif InputMap.has_action("unhoe_soil") and Input.is_action_just_pressed("unhoe_soil"):
+		if trigger_unhoe():
 			return true
+
+	elif Input.is_action_just_pressed("place_torch") or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+		var is_holding_hoe: bool = current_held_item != null and (current_held_item.get("action_type") == ItemDataClass.ActionType.TILL or current_held_item.get("item_id") == "hoe")
+		if is_holding_hoe:
+			if trigger_unhoe():
+				return true
+		else:
+			if trigger_place_held_torch():
+				return true
+
 
 	# 2. Continuous Hold-to-Swing check
 	if _is_action_key_held() and _is_cooldown_ready():
@@ -282,8 +309,12 @@ func trigger_primary_action() -> void:
 	if is_acting or is_ui_blocking():
 		return
 	
-	# If no item is equipped in active slot, do not swing weapon
+	# If no item is equipped in active slot, check if player is facing a mature crop to harvest
 	if not current_held_item:
+		var farm_mgr := _find_farming_manager()
+		var farm_reach := global_position + (last_direction * interaction_distance)
+		if farm_mgr and (farm_mgr.can_harvest(farm_reach) or farm_mgr.can_harvest(global_position)):
+			trigger_harvest()
 		return
 	
 	var action_type: int = ItemDataClass.ActionType.NONE
@@ -291,6 +322,8 @@ func trigger_primary_action() -> void:
 		action_type = current_held_item.get("action_type")
 	
 	match action_type:
+		ItemDataClass.ActionType.TILL:
+			trigger_till()
 		ItemDataClass.ActionType.CHOP:
 			trigger_chop()
 		ItemDataClass.ActionType.ATTACK:
@@ -306,18 +339,86 @@ func trigger_primary_action() -> void:
 		_:
 			if current_held_item and current_held_item.get("item_type") == ItemDataClass.ItemType.SEED:
 				trigger_plant()
+			elif current_held_item and current_held_item.get("item_id") == "hoe":
+				trigger_till()
+			elif current_held_item and current_held_item.get("item_id") == "watering_can":
+				trigger_watering()
 			else:
 				trigger_swing()
+
+
+var _current_farm_target_pos: Vector2 = Vector2.ZERO
+
+
+## Calculates farming action target: targets mouse cursor if within reach (64px),
+## automatically turns Ken to face the cursor, and snaps to grid tile center.
+func get_farming_target_pos(max_reach: float = 64.0) -> Vector2:
+	var farm_mgr := _find_farming_manager()
+	var mouse_pos := get_global_mouse_position()
+	var dist := global_position.distance_to(mouse_pos)
+	
+	if dist <= max_reach:
+		var dir := (mouse_pos - global_position).normalized()
+		last_direction = get_facing_direction(dir)
+		_update_held_item_position()
+		_update_tool_hitbox_position()
+		play_idle_animation()
+		if farm_mgr:
+			return farm_mgr.grid_to_world(farm_mgr.world_to_grid(mouse_pos))
+		return mouse_pos
+	
+	# Fallback if mouse is out of reach
+	var facing_pos := global_position + (last_direction * interaction_distance)
+	if farm_mgr:
+		return farm_mgr.grid_to_world(farm_mgr.world_to_grid(facing_pos))
+	return facing_pos
+
+
+func trigger_till() -> void:
+	var farm_mgr := _find_farming_manager()
+	_current_farm_target_pos = get_farming_target_pos()
+	_is_unhoeing = false
+	
+	if farm_mgr and not farm_mgr.can_hoe_tile(_current_farm_target_pos):
+		# Prevent hoeing invalid terrain, occupied tiles, or already hoed tiles
+		return
+	
+	_start_directional_swing(ItemDataClass.ActionType.TILL)
+
+
+## Safely undoes hoed soil back to normal ground when holding hoe.
+## Cannot unhoe if tile is occupied by a crop.
+func trigger_unhoe() -> bool:
+	var farm_mgr := _find_farming_manager()
+	var target_pos := get_farming_target_pos()
+	if not farm_mgr or not farm_mgr.can_unhoe_tile(target_pos):
+		return false
+	
+	_current_farm_target_pos = target_pos
+	_is_unhoeing = true
+	_start_directional_swing(ItemDataClass.ActionType.TILL)
+	return true
+
 
 
 func trigger_plant() -> void:
 	var hotbar: Control = get_hotbar()
 	var inv: Control = get_inventory()
-	if not hotbar or not inv or not current_held_item:
+	if not inv or not current_held_item:
 		return
 	
-	var active_slot: int = hotbar.get("selected_slot") if hotbar.get("selected_slot") != null else 0
+	var active_slot: int = 0
+	if hotbar and hotbar.get("selected_slot") != null:
+		active_slot = hotbar.get("selected_slot")
+	
 	var item_id: String = current_held_item.get("item_id") if current_held_item.get("item_id") != null else ""
+	var target_pos := get_farming_target_pos()
+	var farm_mgr := _find_farming_manager()
+	
+	# Validation: tile must be hoed, unoccupied, player has seed.
+	# If validation fails: DO NOTHING. Do NOT consume seed!
+	if farm_mgr and not farm_mgr.can_plant_seed(target_pos, item_id):
+		return
 	
 	# Remove 1 seed from hotbar
 	var removed = null
@@ -327,6 +428,9 @@ func trigger_plant() -> void:
 		removed = inv.call("remove_item_at", active_slot, 1)
 	
 	if removed:
+		if farm_mgr:
+			farm_mgr.plant_seed(target_pos, item_id)
+		
 		var anim_name := "harvest_front"
 		if last_direction == Vector2.UP:
 			anim_name = "harvest_back"
@@ -362,6 +466,16 @@ func _start_directional_swing(action_type: int) -> void:
 
 
 func trigger_watering() -> void:
+	var farm_mgr := _find_farming_manager()
+	var target_pos := get_farming_target_pos()
+	
+	# Validation: cannot water empty untilled soil
+	if farm_mgr and not farm_mgr.can_water(target_pos):
+		return
+	
+	if farm_mgr:
+		farm_mgr.water_tile(target_pos)
+	
 	var anim_name := "watering_front"
 	if last_direction == Vector2.DOWN:
 		anim_name = "watering_front"
@@ -374,7 +488,18 @@ func trigger_watering() -> void:
 	_start_action(ItemDataClass.ActionType.WATER, anim_name)
 
 
-func trigger_harvest() -> void:
+func trigger_harvest() -> bool:
+	var farm_mgr := _find_farming_manager()
+	var target_pos := get_farming_target_pos()
+	if not farm_mgr or not farm_mgr.can_harvest(target_pos):
+		var facing_pos := global_position + (last_direction * interaction_distance)
+		if farm_mgr and farm_mgr.can_harvest(facing_pos):
+			target_pos = facing_pos
+		elif farm_mgr and farm_mgr.can_harvest(global_position):
+			target_pos = global_position
+		else:
+			return false
+	
 	var anim_name := "harvest_front"
 	if last_direction == Vector2.DOWN:
 		anim_name = "harvest_front"
@@ -385,6 +510,12 @@ func trigger_harvest() -> void:
 	elif last_direction == Vector2.RIGHT:
 		anim_name = "harvest_right"
 	_start_action(ItemDataClass.ActionType.HARVEST, anim_name)
+	
+	var inv := get_inventory()
+	farm_mgr.harvest_crop(target_pos, inv)
+	return true
+
+
 
 
 func _start_action(action_type: int, animation_name: String) -> void:
@@ -598,6 +729,21 @@ func _execute_action_impact() -> void:
 				elif area.has_method("take_hit"):
 					area.take_hit(tool_power, last_direction)
 					return
+	
+	# 4. Check for hoe tilling / unhoeing action
+	if current_action_type == ItemDataClass.ActionType.TILL or (current_held_item and current_held_item.get("action_type") == ItemDataClass.ActionType.TILL):
+		var farm_mgr := _find_farming_manager()
+		if farm_mgr:
+			var target_pos: Vector2 = _current_farm_target_pos if _current_farm_target_pos != Vector2.ZERO else (global_position + (last_direction * interaction_distance))
+			if _is_unhoeing:
+				farm_mgr.unhoe_tile(target_pos)
+			else:
+				farm_mgr.hoe_tile(target_pos)
+			_current_farm_target_pos = Vector2.ZERO
+			_is_unhoeing = false
+			return
+
+
 
 
 func get_target_tree_in_reach() -> TreeEntity:
@@ -642,6 +788,13 @@ func _update_tool_hitbox_position() -> void:
 
 func trigger_interact() -> void:
 	if is_ui_blocking():
+		return
+	
+	# 0. Check for nearby mature crop to harvest
+	var farm_mgr := _find_farming_manager()
+	var farm_reach := global_position + (last_direction * interaction_distance)
+	if farm_mgr and (farm_mgr.can_harvest(farm_reach) or farm_mgr.can_harvest(global_position)):
+		trigger_harvest()
 		return
 	
 	# 1. Check for nearby Chest
@@ -954,8 +1107,10 @@ func _on_animation_finished() -> void:
 	if is_acting:
 		var completed_action := current_action_type
 		is_acting = false
+		_is_unhoeing = false
 		current_state = State.IDLE
 		impact_executed = false
+
 		animated_sprite.flip_h = false
 		animated_sprite.speed_scale = 1.0
 		_last_action_end_time = Time.get_ticks_msec()
@@ -1067,6 +1222,22 @@ func get_hotbar() -> Control:
 		var node = nodes[i]
 		if is_instance_valid(node) and not node.is_queued_for_deletion():
 			return node as Control
+	return null
+
+
+func _find_farming_manager() -> Node:
+	if not get_tree():
+		return null
+	var parent := get_parent()
+	if parent:
+		var m = parent.find_child("FarmingManager", true, false)
+		if m and is_instance_valid(m) and not m.is_queued_for_deletion():
+			return m
+	var mgrs := get_tree().get_nodes_in_group("farming_manager")
+	for i in range(mgrs.size() - 1, -1, -1):
+		var m = mgrs[i]
+		if is_instance_valid(m) and not m.is_queued_for_deletion():
+			return m
 	return null
 
 

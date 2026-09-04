@@ -117,6 +117,51 @@ static func _init_database_if_needed() -> void:
 	)
 	_items["carrot_seed"] = carrot_seed
 	
+	# Watermelon Seed
+	var watermelon_seed = ItemDataClass.new(
+		"watermelon_seed",
+		"Watermelon Seed",
+		ItemDataClass.ItemType.SEED,
+		get_decor_texture(3, 0),
+		99,
+		ItemDataClass.ActionType.PLANT
+	)
+	_items["watermelon_seed"] = watermelon_seed
+	
+	# Corn Seed
+	var corn_seed = ItemDataClass.new(
+		"corn_seed",
+		"Corn Seed",
+		ItemDataClass.ItemType.SEED,
+		get_decor_texture(5, 0),
+		99,
+		ItemDataClass.ActionType.PLANT
+	)
+	_items["corn_seed"] = corn_seed
+	
+	# Potato Seed
+	var potato_seed = ItemDataClass.new(
+		"potato_seed",
+		"Potato Seed",
+		ItemDataClass.ItemType.SEED,
+		get_decor_texture(4, 0),
+		99,
+		ItemDataClass.ActionType.PLANT
+	)
+	_items["potato_seed"] = potato_seed
+	
+	# Tomato Seed
+	var tomato_seed = ItemDataClass.new(
+		"tomato_seed",
+		"Tomato Seed",
+		ItemDataClass.ItemType.SEED,
+		get_decor_texture(3, 0),
+		99,
+		ItemDataClass.ActionType.PLANT
+	)
+	_items["tomato_seed"] = tomato_seed
+
+	
 	# Iron Sword (Col 0 in tools.png) - Fast, wide combat slash with high damage
 	var sword = ItemDataClass.new(
 		"iron_sword",
@@ -235,3 +280,75 @@ static func _init_database_if_needed() -> void:
 	torch.description = "A wooden torch that provides warm light in the darkness."
 	torch.usable = false
 	_items["torch"] = torch
+	
+	# Carrot (Row 3, Col 4 in Outdoor_Decor_Free.png - fresh harvested carrot)
+	var carrot = ItemDataClass.new(
+		"carrot",
+		"Carrot",
+		ItemDataClass.ItemType.CROP,
+		get_decor_texture(4, 3),
+		99,
+		ItemDataClass.ActionType.NONE
+	)
+	carrot.description = "A crisp, freshly harvested orange carrot."
+	_items["carrot"] = carrot
+	
+	# Wheat
+	var wheat = ItemDataClass.new(
+		"wheat",
+		"Wheat",
+		ItemDataClass.ItemType.CROP,
+		get_decor_texture(5, 3),
+		99,
+		ItemDataClass.ActionType.NONE
+	)
+	wheat.description = "Golden stalks of freshly harvested wheat."
+	_items["wheat"] = wheat
+	
+	# Watermelon
+	var watermelon = ItemDataClass.new(
+		"watermelon",
+		"Watermelon",
+		ItemDataClass.ItemType.CROP,
+		get_decor_texture(6, 3),
+		99,
+		ItemDataClass.ActionType.NONE
+	)
+	watermelon.description = "A juicy, sweet harvested watermelon."
+	_items["watermelon"] = watermelon
+	
+	# Corn
+	var corn = ItemDataClass.new(
+		"corn",
+		"Corn",
+		ItemDataClass.ItemType.CROP,
+		get_decor_texture(6, 2),
+		99,
+		ItemDataClass.ActionType.NONE
+	)
+	corn.description = "Freshly picked ear of golden sweet corn."
+	_items["corn"] = corn
+	
+	# Potato
+	var potato = ItemDataClass.new(
+		"potato",
+		"Potato",
+		ItemDataClass.ItemType.CROP,
+		get_decor_texture(2, 2),
+		99,
+		ItemDataClass.ActionType.NONE
+	)
+	potato.description = "A hearty, freshly dug earthy potato."
+	_items["potato"] = potato
+	
+	# Tomato
+	var tomato = ItemDataClass.new(
+		"tomato",
+		"Tomato",
+		ItemDataClass.ItemType.CROP,
+		get_decor_texture(3, 3),
+		99,
+		ItemDataClass.ActionType.NONE
+	)
+	tomato.description = "A ripe, vibrant red garden tomato."
+	_items["tomato"] = tomato

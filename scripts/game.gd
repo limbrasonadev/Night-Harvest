@@ -27,11 +27,28 @@ func _give_initial_tools() -> void:
 		var axe = ItemDatabaseClass.get_item("wood_axe")
 		var can = ItemDatabaseClass.get_item("watering_can")
 		var pick = ItemDatabaseClass.get_item("pickaxe")
+		var hoe = ItemDatabaseClass.get_item("hoe")
 		
 		if sword: inv.call("add_item", sword, 1)
 		if axe: inv.call("add_item", axe, 1)
 		if can: inv.call("add_item", can, 1)
 		if pick: inv.call("add_item", pick, 1)
+		if hoe: inv.call("add_item", hoe, 1)
+		
+		# All independent harvested crops
+		var crop_ids := ["carrot", "wheat", "watermelon", "corn", "potato", "tomato"]
+		for cid in crop_ids:
+			var crop_res = ItemDatabaseClass.get_item(cid)
+			if crop_res:
+				inv.call("add_item", crop_res, 5)
+		
+		# All independent crop seeds
+		var seed_ids := ["carrot_seed", "wheat_seed", "watermelon_seed", "corn_seed", "potato_seed", "tomato_seed"]
+		for sid in seed_ids:
+			var seed_res = ItemDatabaseClass.get_item(sid)
+			if seed_res:
+				inv.call("add_item", seed_res, 5)
+
 
 
 func _populate_starter_chest() -> void:
@@ -144,6 +161,12 @@ func _setup_player_systems() -> void:
 		var spawn_scene = preload("res://Scenes/SpawnManager.tscn")
 		spawn_mgr = spawn_scene.instantiate()
 		add_child(spawn_mgr)
+	
+	# --- FarmingManager ---
+	var farming_script = preload("res://scripts/farming/FarmingManager.gd")
+	var farming_mgr: Node2D = farming_script.new()
+	farming_mgr.name = "FarmingManager"
+	add_child(farming_mgr)
 
 
 func _update_quest_hud(hud: Control, quest_mgr: Node) -> void:
