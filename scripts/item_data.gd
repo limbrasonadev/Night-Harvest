@@ -7,7 +7,8 @@ enum ItemType {
 	MATERIAL,
 	SEED,
 	CROP,
-	PLACEABLE
+	PLACEABLE,
+	FOOD
 }
 
 enum ActionType {
@@ -19,7 +20,8 @@ enum ActionType {
 	TILL,
 	HARVEST,
 	PLANT,
-	USE
+	USE,
+	EAT
 }
 
 @export var item_id: String = ""
@@ -46,6 +48,12 @@ enum ActionType {
 @export var swoosh_color: Color = Color(1.0, 1.0, 1.0, 0.95)
 @export var knockback_force: float = 40.0
 @export var allow_continuous_use: bool = true
+
+# --- Food / Hunger System (Phase 6) ---
+@export var edible: bool = false
+@export var hunger_restore: float = 0.0
+@export var health_restore: float = 0.0 ## Future: cooking system
+@export var food_category: String = "raw" ## Future: "raw", "cooked", "recipe"
 
 
 func _init(p_id: String = "", p_name: String = "", p_type: ItemType = ItemType.MATERIAL, p_icon: Texture2D = null, p_max_stack: int = 99, p_action: ActionType = ActionType.NONE) -> void:

@@ -8,12 +8,18 @@ signal slot_selected(slot_index: int, item_data: Resource)
 
 const SLOT_COUNT := 4
 
+var _selection_tween: Tween
+var _animated_icon: Control
+var _last_visual_selection := -1
+
 @export var selected_slot: int = 0:
 	set(value):
 		if value >= 0 and value < SLOT_COUNT:
 			selected_slot = value
 			_update_slot_visuals()
 			slot_selected.emit(selected_slot, get_selected_item())
+			if Engine.has_singleton("GameAudio") or get_node_or_null("/root/GameAudio"):
+				GameAudio.play("hotbar_select")
 
 @onready var slot_containers: Array[Control] = [
 	$Container/SlotsBox/Slot1,
@@ -203,6 +209,7 @@ func _on_inventory_button_pressed() -> void:
 
 
 func _update_slot_visuals() -> void:
+	var selection_changed := selected_slot != _last_visual_selection
 	for i in range(slot_containers.size()):
 		var slot := slot_containers[i]
 		if not is_instance_valid(slot):
@@ -234,10 +241,12 @@ func _update_slot_visuals() -> void:
 				icon_rect.visible = true
 			if item_label:
 				item_label.text = item.get("display_name") if item.get("display_name") != null else ""
+				slot.tooltip_text = item_label.text
 			if count_label:
 				count_label.text = str(amount) if amount > 1 else ""
 				count_label.visible = amount > 1
 		else:
+			slot.tooltip_text = "Empty slot"
 			if icon_rect:
 				icon_rect.texture = null
 				icon_rect.visible = false
@@ -246,3 +255,19 @@ func _update_slot_visuals() -> void:
 			if count_label:
 				count_label.text = ""
 				count_label.visible = false
+	if selection_changed and _last_visual_selection >= 0:
+		_animate_selection()
+	_last_visual_selection = selected_slot
+
+
+func _animate_selection() -> void:
+	if _selection_tween and _selection_tween.is_valid():
+		_selection_tween.kill()
+	if is_instance_valid(_animated_icon):
+		_animated_icon.scale = Vector2.ONE
+	_animated_icon = slot_containers[selected_slot].get_node("Icon")
+	_animated_icon.pivot_offset = _animated_icon.size * 0.5
+	# Animate only the icon. Container dimensions and slot hit areas never move.
+	_animated_icon.scale = Vector2(1.08, 1.08)
+	_selection_tween = create_tween()
+	_selection_tween.tween_property(_animated_icon, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_SINE)

@@ -45,6 +45,7 @@ func _ready() -> void:
 	test_4_direction_movement_and_facing()
 	test_spawn_manager_scene_and_spawning()
 	test_torch_world_item_and_inventory()
+	test_bed_and_sleeping_system()
 	print("--- ALL NIGHT HARVEST TESTS PASSED SUCCESSFULLY! ---")
 	get_tree().quit(0)
 
@@ -1118,6 +1119,124 @@ func test_torch_world_item_and_inventory() -> void:
 	
 	test_container.queue_free()
 	print("Torch system tests: OK")
+
+
+func test_bed_and_sleeping_system() -> void:
+	print("Testing Phase 7: Bed & Sleeping System...")
+	var GameClockScript = preload("res://scripts/game_clock.gd")
+	var PlayerStatsScript = preload("res://scripts/player_stats.gd")
+	var BedScene = preload("res://Scenes/Objects/Bed.tscn")
+	
+	# 1. Instantiate Bed Scene and verify groups and hierarchy
+	var bed = BedScene.instantiate()
+	add_child(bed)
+	assert(bed.is_in_group("beds"), "Bed is in 'beds' group")
+	assert(bed.is_in_group("interactables"), "Bed is in 'interactables' group")
+	assert(bed.has_method("can_interact"), "Bed has can_interact method")
+	assert(bed.has_method("interact"), "Bed has interact method")
+	assert(bed.get_node_or_null("Sprite2D") != null, "Bed has Sprite2D")
+	assert(bed.get_node_or_null("StaticBody2D") != null, "Bed has StaticBody2D")
+	assert(bed.get_node_or_null("InteractionArea") != null, "Bed has InteractionArea")
+	assert(bed.get_node_or_null("SleepPosition") != null, "Bed has SleepPosition marker")
+	assert(bed.get_node("SleepPosition").position == Vector2(0.5, 1.5), "SleepPosition centers the pillow-to-mattress surface")
+	assert(bed.get_node_or_null("WakePosition") != null, "Bed has WakePosition marker")
+	assert(bed.get_node("WakePosition").position == Vector2(26, 4), "WakePosition is beside bed (26, 4)")
+	assert(bed.get_node_or_null("InteractionLabel") != null, "Bed has InteractionLabel")
+	
+	# Verify Bed uses the real Red Bed atlas region from HouseInteriorA.png
+	var sprite: Sprite2D = bed.get_node("Sprite2D")
+	assert(sprite.texture is AtlasTexture, "Bed sprite uses AtlasTexture")
+	var atlas_tex: AtlasTexture = sprite.texture
+	assert(atlas_tex.region == Rect2(128, 33, 32, 48), "Bed uses real Red Bed atlas region Rect2(128, 33, 32, 48)")
+	
+	# Verify Stool is regular non-sleep furniture
+	var StoolScene = preload("res://Scenes/Objects/Stool.tscn")
+	var stool = StoolScene.instantiate()
+	add_child(stool)
+	assert(not stool.is_in_group("beds"), "Stool is NOT in 'beds' group")
+	assert(not stool.is_in_group("interactables"), "Stool is NOT in 'interactables' group")
+	assert(not stool.has_method("interact"), "Stool has NO interact method")
+	assert(stool.get_node_or_null("InteractionArea") == null, "Stool has NO InteractionArea")
+	assert(stool.get_node_or_null("SleepPosition") == null, "Stool has NO SleepPosition")
+	stool.queue_free()
+	
+	# 2. Test GameClock.advance_to_time()
+	var clock = GameClockScript.new()
+	add_child(clock)
+	clock.current_day = 1
+	clock.current_hour = 22 # 10:00 PM
+	clock.current_minute = 30
+	
+	# Sleep at 10:30 PM -> should advance to 6:00 AM on Day 2
+	clock.advance_to_time(6, 0)
+	assert(clock.current_hour == 6, "Clock advanced to 6:00 AM")
+	assert(clock.current_minute == 0, "Clock minute reset to 0")
+	assert(clock.current_day == 2, "Day incremented across midnight to Day 2")
+	
+	# Sleep at 2:00 AM on Day 2 -> should advance to 6:00 AM on Day 2 (NOT Day 3)
+	clock.current_hour = 2
+	clock.current_minute = 0
+	clock.advance_to_time(6, 0)
+	assert(clock.current_hour == 6, "Clock advanced to 6:00 AM")
+	assert(clock.current_minute == 0, "Clock minute reset to 0")
+	assert(clock.current_day == 2, "Day did NOT double-increment when sleeping after midnight")
+	
+	# 3. Test Sleep Schedule validation
+	clock.current_hour = 12 # Midday
+	assert(bed.is_sleep_allowed() == false, "Sleeping not allowed at 12:00 PM")
+	clock.current_hour = 20 # 8:00 PM
+	assert(bed.is_sleep_allowed() == true, "Sleeping allowed at 8:00 PM")
+	clock.current_hour = 3 # 3:00 AM
+	assert(bed.is_sleep_allowed() == true, "Sleeping allowed at 3:00 AM")
+	
+	# 4. Test PlayerStats overnight effects
+	var stats = PlayerStatsScript.new()
+	add_child(stats)
+	stats.current_hunger = 80.0
+	stats.current_health = 60
+	stats.drain_hunger(bed.overnight_hunger_cost)
+	stats.heal(bed.overnight_hp_restore)
+	assert(stats.current_hunger == 70.0, "Overnight hunger cost applied (-10)")
+	assert(stats.current_health == 80, "Overnight HP restore applied (+20)")
+	
+	# 5. Test Ken enter_sleep_state and exit_sleep_state
+	var KenScene = preload("res://Scenes/ken.tscn")
+	var ken = KenScene.instantiate()
+	add_child(ken)
+	ken.last_direction = Vector2.LEFT
+	ken.play_idle_animation()
+	var normal_offset: Vector2 = ken.animated_sprite.offset
+	ken.enter_sleep_state()
+	var col_shape: CollisionShape2D = ken.get_node("CollisionShape2D")
+	assert(ken.current_state == KenScript.State.SLEEPING, "Ken is in SLEEPING state")
+	assert(col_shape.disabled == true, "Collision shape disabled during sleep")
+	assert(ken.rotation == 0.0, "Vertical bed keeps Ken upright")
+	assert(ken.animated_sprite.animation == &"idle_front" and ken.animated_sprite.frame == 0, "Sleep uses existing front frame")
+	assert(not ken.animated_sprite.is_playing(), "Sleep frame is frozen")
+	assert(not ken.animated_sprite.flip_h and not ken.animated_sprite.flip_v, "Sleep face is unflipped")
+	assert(ken.last_direction == Vector2.LEFT, "Sleep visual preserves real facing")
+	assert(ken.animated_sprite.offset == Vector2(0, -1), "Only visible-frame origin is compensated")
+	ken._on_hotbar_slot_selected(0, ItemDatabaseScript.get_item("iron_sword"))
+	assert(not ken.held_item_sprite.visible, "Hotbar refresh keeps sleeping tool hidden")
+	ken._on_hotbar_slot_selected(0, ItemDatabaseScript.get_item("torch"))
+	ken._on_clock_time_updated(6, 0)
+	assert(not ken.held_torch_flame.visible and not ken.torch_light.enabled, "Sleeping torch stays hidden during clock update")
+	ken.trigger_primary_action()
+	assert(not ken.is_acting, "Sleeping Ken cannot start an action")
+	ken.exit_sleep_state()
+	assert(ken.current_state == KenScript.State.IDLE, "Ken restored to IDLE state")
+	assert(col_shape.disabled == false, "Collision shape re-enabled upon wake")
+	assert(ken.rotation_degrees == 0.0, "Ken rotation restored to 0.0 upon wake")
+	assert(ken.animated_sprite.animation == &"idle_left" and ken.animated_sprite.is_playing(), "Original facing animation resumes")
+	assert(ken.animated_sprite.offset == normal_offset, "Normal sprite origin restored")
+	assert(ken.held_torch_flame.visible and ken.torch_light.enabled, "Selected held item restored")
+	ken.queue_free()
+	
+	# Clean up
+	bed.queue_free()
+	clock.queue_free()
+	stats.queue_free()
+	print("Bed & Sleeping System tests: OK")
 
 
 

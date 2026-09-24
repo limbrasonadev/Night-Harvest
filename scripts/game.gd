@@ -11,6 +11,7 @@ func _ready() -> void:
 func _setup_gameplay_items() -> void:
 	_give_initial_tools()
 	_populate_starter_chest()
+	_spawn_bed()
 	
 	# Explicit sync for first frame
 	var hotbar = get_node_or_null("UI/HUD/BottomCenter/Hotbar")
@@ -63,6 +64,25 @@ func _populate_starter_chest() -> void:
 		if carrot_seed: chest.call("add_item", carrot_seed, 4)
 
 
+func _spawn_bed() -> void:
+	# 1. Regular non-sleep furniture stool at (70, -138)
+	if not has_node("Stool"):
+		var stool_scene = preload("res://Scenes/Objects/Stool.tscn")
+		var stool = stool_scene.instantiate()
+		stool.name = "Stool"
+		stool.position = Vector2(70, -138)
+		add_child(stool)
+	
+	# 2. Real Red Bed at (30, -182)
+	if has_node("Bed") or not get_tree().get_nodes_in_group("beds").is_empty():
+		return
+	var bed_scene = preload("res://Scenes/Objects/Bed.tscn")
+	var bed = bed_scene.instantiate()
+	bed.name = "Bed"
+	bed.position = Vector2(30, -182)
+	add_child(bed)
+
+
 func _setup_player_systems() -> void:
 	# --- PlayerStats ---
 	var stats_script = preload("res://scripts/player_stats.gd")
@@ -83,13 +103,26 @@ func _setup_player_systems() -> void:
 	var hud = get_node_or_null("UI/HUD")
 	if hud:
 		stats.health_changed.connect(hud.set_hp)
-		stats.defense_changed.connect(hud.set_defense)
+		# Defense display replaced by Hunger on HUD (Phase 6)
+		# stats.defense_changed.connect(hud.set_defense)  # Kept for Phase 9
+		stats.hunger_changed.connect(hud.set_hunger)
 		stats.level_changed.connect(func(lvl: int):
 			hud.set_level_xp(lvl, stats.xp, stats.xp_to_next_level)
+			GameAudio.play("level_up")
 		)
+		stats.xp_changed.connect(func(current: int, maximum: int):
+			hud.set_level_xp(stats.level, current, maximum)
+		)
+		stats.xp_gained.connect(hud.notify_xp_gain)
+		stats.xp_gained.connect(func(_amount: int): GameAudio.play("xp_gain"))
+		stats.gold_changed.connect(func(_total: int): _sync_hud_resources(hud, stats))
+		var inventory := get_node_or_null("UI/Inventory")
+		if inventory:
+			inventory.inventory_changed.connect(func(): _sync_hud_resources(hud, stats))
+		_sync_hud_resources(hud, stats)
 		# Initial sync
 		hud.set_hp(stats.current_health, stats.max_health)
-		hud.set_defense(stats.current_defense, stats.max_defense)
+		hud.set_hunger(stats.current_hunger, stats.max_hunger)
 		hud.set_level_xp(stats.level, stats.xp, stats.xp_to_next_level)
 	
 	# --- GameClock ---
@@ -106,19 +139,31 @@ func _setup_player_systems() -> void:
 				hud.set_nightfall_status("ARRIVED")
 			else:
 				hud.set_nightfall_warning(clock.get_nightfall_countdown())
+				# Zombie warning: 1 game-minute (≤60 remaining) before official night
+				var countdown_str: String = clock.get_nightfall_countdown()
+				var parts := countdown_str.split(":")
+				if parts.size() == 2:
+					var remaining := int(parts[0]) * 60 + int(parts[1])
+					if remaining > 0 and remaining <= 60:
+						hud.show_zombie_warning()
 		)
 		clock.day_changed.connect(func(new_day: int):
 			hud.set_calendar(new_day, clock.get_time_string())
 		)
 		clock.night_started.connect(func():
 			hud.set_nightfall_status("ARRIVED")
+			hud.show_zombie_arrival()
 		)
 		clock.night_ended.connect(func():
 			hud.set_nightfall_warning(clock.get_nightfall_countdown())
+			hud.reset_zombie_warnings()
 		)
 		# Initial sync
 		hud.set_calendar(clock.current_day, clock.get_time_string())
 		hud.set_nightfall_warning(clock.get_nightfall_countdown())
+	
+	# --- Hunger drain is now self-contained in PlayerStats._process() ---
+	# (Real-time timer: 1 hunger point every 75 seconds, configurable)
 	
 	# --- EventBus ---
 	var bus_script = preload("res://scripts/event_bus.gd")
@@ -139,6 +184,7 @@ func _setup_player_systems() -> void:
 		)
 		quest_mgr.quest_completed.connect(func(_qid: String):
 			_update_quest_hud(hud, quest_mgr)
+			GameAudio.play("quest_complete")
 		)
 		quest_mgr.daily_quests_refreshed.connect(func():
 			_update_quest_hud(hud, quest_mgr)
@@ -161,6 +207,11 @@ func _setup_player_systems() -> void:
 		var spawn_scene = preload("res://Scenes/SpawnManager.tscn")
 		spawn_mgr = spawn_scene.instantiate()
 		add_child(spawn_mgr)
+	# Scene-placed managers become ready before this deferred clock setup.
+	# Bind every map spawner now that the clock exists.
+	for manager in get_tree().get_nodes_in_group("spawn_manager"):
+		if is_ancestor_of(manager):
+			manager.bind_game_clock(clock)
 	
 	# --- FarmingManager ---
 	var farming_script = preload("res://scripts/farming/FarmingManager.gd")
@@ -170,27 +221,19 @@ func _setup_player_systems() -> void:
 
 
 func _update_quest_hud(hud: Control, quest_mgr: Node) -> void:
-	# Update the quest tracker labels (Quest1, Quest2, etc.) in the HUD
-	var quest_container = hud.get_node_or_null("MidLeft/QuestTracker/Margin/VBox")
-	if not quest_container:
-		return
-	
-	var quest_labels: Array = []
-	for child in quest_container.get_children():
-		if child is Label and child.name.begins_with("Quest"):
-			quest_labels.append(child)
-	
-	var quests: Array = quest_mgr.active_quests
-	
-	for i in range(quest_labels.size()):
-		var label: Label = quest_labels[i]
-		if i < quests.size():
-			label.text = quests[i].get_progress_text()
-			label.visible = true
-			if quests[i].is_completed:
-				label.add_theme_color_override("font_color", Color(0.4, 0.85, 0.4, 1.0))
-			else:
-				label.add_theme_color_override("font_color", Color(0.88, 0.85, 0.78, 1.0))
-		else:
-			label.text = ""
-			label.visible = false
+	hud.set_quests(quest_mgr.active_quests)
+
+
+func _sync_hud_resources(hud: Control, stats: Node) -> void:
+	var inventory := get_node_or_null("UI/Inventory")
+	var wood := 0
+	var stone := 0
+	if inventory:
+		for slot in inventory.slots + inventory.hotbar_slots:
+			var item: Resource = slot.get("item")
+			if not item:
+				continue
+			match item.get("item_id"):
+				"wood_log": wood += int(slot.get("amount", 0))
+				"stone_rock": stone += int(slot.get("amount", 0))
+	hud.set_resources(stats.gold, wood, stone)

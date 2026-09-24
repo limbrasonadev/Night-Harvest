@@ -18,6 +18,9 @@ signal item_sold(item_id: String, amount: int)
 # --- Combat ---
 signal zombie_killed()
 
+# --- Food (Phase 6) ---
+signal food_eaten(food_id: String)
+
 # --- Crafting ---
 signal item_crafted(item_id: String)
 

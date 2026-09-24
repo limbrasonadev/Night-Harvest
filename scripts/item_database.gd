@@ -285,12 +285,14 @@ static func _init_database_if_needed() -> void:
 	var carrot = ItemDataClass.new(
 		"carrot",
 		"Carrot",
-		ItemDataClass.ItemType.CROP,
+		ItemDataClass.ItemType.FOOD,
 		get_decor_texture(4, 3),
 		99,
-		ItemDataClass.ActionType.NONE
+		ItemDataClass.ActionType.EAT
 	)
 	carrot.description = "A crisp, freshly harvested orange carrot."
+	carrot.edible = true
+	carrot.hunger_restore = 8.0
 	_items["carrot"] = carrot
 	
 	# Wheat
@@ -309,46 +311,54 @@ static func _init_database_if_needed() -> void:
 	var watermelon = ItemDataClass.new(
 		"watermelon",
 		"Watermelon",
-		ItemDataClass.ItemType.CROP,
+		ItemDataClass.ItemType.FOOD,
 		get_decor_texture(6, 3),
 		99,
-		ItemDataClass.ActionType.NONE
+		ItemDataClass.ActionType.EAT
 	)
 	watermelon.description = "A juicy, sweet harvested watermelon."
+	watermelon.edible = true
+	watermelon.hunger_restore = 18.0
 	_items["watermelon"] = watermelon
 	
 	# Corn
 	var corn = ItemDataClass.new(
 		"corn",
 		"Corn",
-		ItemDataClass.ItemType.CROP,
+		ItemDataClass.ItemType.FOOD,
 		get_decor_texture(6, 2),
 		99,
-		ItemDataClass.ActionType.NONE
+		ItemDataClass.ActionType.EAT
 	)
 	corn.description = "Freshly picked ear of golden sweet corn."
+	corn.edible = true
+	corn.hunger_restore = 12.0
 	_items["corn"] = corn
 	
 	# Potato
 	var potato = ItemDataClass.new(
 		"potato",
 		"Potato",
-		ItemDataClass.ItemType.CROP,
+		ItemDataClass.ItemType.FOOD,
 		get_decor_texture(2, 2),
 		99,
-		ItemDataClass.ActionType.NONE
+		ItemDataClass.ActionType.EAT
 	)
 	potato.description = "A hearty, freshly dug earthy potato."
+	potato.edible = true
+	potato.hunger_restore = 10.0
 	_items["potato"] = potato
 	
 	# Tomato
 	var tomato = ItemDataClass.new(
 		"tomato",
 		"Tomato",
-		ItemDataClass.ItemType.CROP,
+		ItemDataClass.ItemType.FOOD,
 		get_decor_texture(3, 3),
 		99,
-		ItemDataClass.ActionType.NONE
+		ItemDataClass.ActionType.EAT
 	)
 	tomato.description = "A ripe, vibrant red garden tomato."
+	tomato.edible = true
+	tomato.hunger_restore = 8.0
 	_items["tomato"] = tomato

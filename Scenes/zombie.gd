@@ -37,10 +37,20 @@ enum State {
 @export var attack_range: float = 22.0
 @export var attack_cooldown_time: float = 1.2
 
+# --- Sunrise Burning ---
+@export var burn_damage: int = 5
+@export var burn_interval: float = 0.5
+
 var current_health: int = 100
 var current_state: State = State.IDLE
 var is_dead: bool = false
 var facing_direction: Vector2 = Vector2.DOWN
+
+# --- Burning State ---
+var is_burning: bool = false
+var _burn_timer: float = 0.0
+var _burn_effect: CPUParticles2D = null
+var _was_damaged_by_player: bool = false
 
 # --- Cardinal Directions (Strict 4-Way Movement) ---
 const CARDINAL_DIRECTIONS: Array[Vector2] = [
@@ -85,6 +95,15 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	if is_dead or current_state == State.DEAD:
 		return
+	
+	# --- Sunrise burn tick ---
+	if is_burning:
+		_burn_timer += delta
+		if _burn_timer >= burn_interval:
+			_burn_timer -= burn_interval
+			_apply_burn_damage()
+			if is_dead:
+				return
 	
 	# Attack cooldown countdown
 	if _attack_cooldown_timer > 0.0:
@@ -151,6 +170,9 @@ func _enter_state(new_state: State) -> void:
 		State.ATTACK:
 			velocity = Vector2.ZERO
 			_attack_hit_delivered = false
+			var player := _get_player()
+			if player:
+				face_target(player)
 			_play_anim("attack")
 		
 		State.SEARCH:
@@ -167,6 +189,7 @@ func _enter_state(new_state: State) -> void:
 
 
 func _process_idle(player: CharacterBody2D) -> void:
+	velocity = Vector2.ZERO
 	# Check if player detected
 	if player and _can_detect_player(player):
 		_last_known_player_pos = player.global_position
@@ -197,6 +220,7 @@ func _process_wander(player: CharacterBody2D, _delta: float) -> void:
 
 
 func _process_alert(player: CharacterBody2D) -> void:
+	velocity = Vector2.ZERO
 	if player:
 		face_target(player)
 	
@@ -220,13 +244,12 @@ func _process_chase(player: CharacterBody2D, _delta: float) -> void:
 	
 	# In attack range
 	if dist <= attack_range:
-		# MUST face player BEFORE entering ATTACK and BEFORE playing attack animation
-		face_target(player)
 		if _attack_cooldown_timer <= 0.0:
 			_enter_state(State.ATTACK)
 			return
 		else:
 			# Cooldown waiting: stay in place facing player
+			face_target(player)
 			velocity = Vector2.ZERO
 			_play_anim("idle")
 			return
@@ -241,8 +264,8 @@ func _process_chase(player: CharacterBody2D, _delta: float) -> void:
 
 func _process_attack(player: CharacterBody2D) -> void:
 	velocity = Vector2.ZERO
-	# Continually ensure zombie faces player during attack
-	if player:
+	# Ensure zombie faces player during attack windup before hit is delivered
+	if player and not _attack_hit_delivered:
 		face_target(player)
 
 
@@ -282,7 +305,11 @@ func face_target(target: Node2D) -> void:
 	var diff: Vector2 = target.global_position - global_position
 	var cardinal := get_cardinal_direction(diff)
 	facing_direction = cardinal
-	_apply_directional_facing(cardinal)
+	
+	if current_state == State.ATTACK:
+		_apply_attack_facing_diff(diff)
+	else:
+		_apply_directional_facing(cardinal)
 
 
 ## Determines the single closest cardinal direction (UP, DOWN, LEFT, RIGHT) from a vector.
@@ -292,6 +319,32 @@ func get_cardinal_direction(vec: Vector2) -> Vector2:
 		return Vector2.RIGHT if vec.x > 0 else Vector2.LEFT
 	else:
 		return Vector2.DOWN if vec.y > 0 else Vector2.UP
+
+
+## Applies visual sprite facing specifically for attack animation.
+## In Zombie_Default_Attack1.png, the sprite natively faces and slams to the LEFT.
+## Therefore:
+## - When target is to the right (diff.x > 0.5), flip_h must be true to slam RIGHT toward target.
+## - When target is to the left (diff.x < -0.5), flip_h must be false to slam LEFT toward target.
+## - When vertically aligned (|diff.x| <= 0.5):
+##   Follow cardinal intent or current flip so attack faces toward target side.
+func _apply_attack_facing_diff(diff: Vector2) -> void:
+	if not animated_sprite:
+		return
+	
+	if diff.x > 0.5:
+		animated_sprite.flip_h = true
+	elif diff.x < -0.5:
+		animated_sprite.flip_h = false
+	else:
+		if facing_direction == Vector2.RIGHT:
+			animated_sprite.flip_h = true
+		elif facing_direction == Vector2.LEFT:
+			animated_sprite.flip_h = false
+		elif diff.x >= 0.0:
+			animated_sprite.flip_h = true
+		else:
+			animated_sprite.flip_h = false
 
 
 ## Determines cardinal chase direction with wall obstacle fallback.
@@ -383,12 +436,25 @@ func _deliver_attack_damage() -> void:
 	
 	# Check distance reach
 	if dist <= attack_range + 10.0:
-		var cardinal_to_player := get_cardinal_direction(diff)
-		# Zombie must be facing the player (or player is practically on top of zombie <= 14px)
-		if cardinal_to_player == facing_direction or dist <= 14.0:
+		if _is_target_in_front(diff, dist):
 			if player.has_method("take_damage"):
-				var push_dir := facing_direction if facing_direction != Vector2.ZERO else diff.normalized()
+				var push_dir := diff.normalized() if diff != Vector2.ZERO else facing_direction
 				player.take_damage(attack_damage, push_dir, 35.0)
+
+
+func _is_target_in_front(diff: Vector2, dist: float) -> bool:
+	if dist <= 16.0:
+		return true
+	match facing_direction:
+		Vector2.RIGHT:
+			return diff.x > 0.0
+		Vector2.LEFT:
+			return diff.x < 0.0
+		Vector2.DOWN:
+			return diff.y > 0.0
+		Vector2.UP:
+			return diff.y < 0.0
+	return false
 
 
 func _on_animation_finished() -> void:
@@ -400,16 +466,16 @@ func _on_animation_finished() -> void:
 			_attack_cooldown_timer = attack_cooldown_time
 			var player := _get_player()
 			if player and _can_detect_player(player):
-				face_target(player)
 				_enter_state(State.CHASE)
+				face_target(player)
 			else:
 				_enter_state(State.IDLE)
 		
 		State.HURT:
 			var player := _get_player()
 			if player:
-				face_target(player)
 				_enter_state(State.CHASE)
+				face_target(player)
 			else:
 				_enter_state(State.IDLE)
 
@@ -419,17 +485,21 @@ func take_damage(amount: int, direction: Vector2 = Vector2.ZERO, knockback: floa
 	if is_dead or current_state == State.DEAD:
 		return
 	
+	# Track that the player contributed damage (for kill-credit / EXP)
+	_was_damaged_by_player = true
+	
 	current_health = maxi(0, current_health - amount)
 	
 	# Update individual health bar immediately
 	if health_bar:
 		health_bar.value = current_health
 	
-	# Visual hit reaction (red flash)
+	# Visual hit reaction (red flash) — use white target if not burning, warm tint if burning
 	if animated_sprite:
 		var tween := create_tween()
 		animated_sprite.modulate = Color(1.8, 0.3, 0.3, 1.0)
-		tween.tween_property(animated_sprite, "modulate", Color.WHITE, 0.15)
+		var restore_color := Color(1.5, 0.7, 0.3, 1.0) if is_burning else Color.WHITE
+		tween.tween_property(animated_sprite, "modulate", restore_color, 0.15)
 	
 	# Apply knockback
 	if direction != Vector2.ZERO and knockback > 0.0:
@@ -453,6 +523,15 @@ func _die() -> void:
 	if is_dead:
 		return
 	is_dead = true
+	
+	# Stop burning and clean up fire effect
+	is_burning = false
+	_burn_timer = 0.0
+	if _burn_effect and is_instance_valid(_burn_effect):
+		_burn_effect.emitting = false
+		_burn_effect.queue_free()
+		_burn_effect = null
+	
 	_enter_state(State.DEAD)
 	
 	# Hide health bar
@@ -465,16 +544,21 @@ func _die() -> void:
 	if collision_shape:
 		collision_shape.set_deferred("disabled", true)
 	
-	# Notify QuestManager / EventBus
-	var bus_nodes := get_tree().get_nodes_in_group("event_bus")
-	for bus in bus_nodes:
-		if is_instance_valid(bus) and bus.has_signal("zombie_killed"):
-			bus.zombie_killed.emit()
-			break
+	# Notify QuestManager / EventBus — only if the player contributed damage.
+	# Pure sunlight deaths do NOT award kill credit / quest progress.
+	if _was_damaged_by_player and is_inside_tree():
+		var tree := get_tree()
+		if tree:
+			var bus_nodes := tree.get_nodes_in_group("event_bus")
+			for bus in bus_nodes:
+				if is_instance_valid(bus) and bus.has_signal("zombie_killed"):
+					bus.zombie_killed.emit()
+					break
 	
 	# Play dead animation, then fade out and free
 	if animated_sprite:
 		_play_anim("dead")
+		animated_sprite.modulate = Color.WHITE  # Reset tint for death anim
 		var tween := create_tween()
 		tween.tween_interval(0.8) # Let dead animation display
 		tween.tween_property(animated_sprite, "modulate:a", 0.0, 0.4)
@@ -521,8 +605,104 @@ func _play_anim(anim_name: String) -> void:
 
 
 func _get_player() -> CharacterBody2D:
-	var players := get_tree().get_nodes_in_group("player")
+	if not is_inside_tree():
+		return null
+	var tree := get_tree()
+	if not tree:
+		return null
+	var players := tree.get_nodes_in_group("player")
 	for p in players:
 		if is_instance_valid(p) and p is CharacterBody2D:
 			return p
 	return null
+
+
+# ==============================================================================
+# SUNRISE BURNING SYSTEM
+# ==============================================================================
+
+## Called by SpawnManager when morning begins.
+## Ignites this zombie — it will take periodic burn damage until death.
+## Safe to call multiple times; duplicate calls are ignored.
+func start_burning() -> void:
+	if is_burning or is_dead:
+		return
+	
+	is_burning = true
+	_burn_timer = 0.0
+	
+	# Apply warm orange tint to sprite
+	if animated_sprite:
+		animated_sprite.modulate = Color(1.5, 0.7, 0.3, 1.0)
+	
+	# Create procedural fire particles
+	_burn_effect = _create_burn_effect()
+	add_child(_burn_effect)
+	print("[Zombie] Started burning at sunrise")
+
+
+## Applies burn damage directly — bypasses take_damage() to avoid
+## setting _was_damaged_by_player (sunlight kills ≠ player kills).
+func _apply_burn_damage() -> void:
+	if is_dead:
+		return
+	
+	current_health = maxi(0, current_health - burn_damage)
+	
+	# Update health bar
+	if health_bar:
+		health_bar.value = current_health
+	
+	# Brief orange flash on each burn tick
+	if animated_sprite and not is_dead:
+		var tween := create_tween()
+		animated_sprite.modulate = Color(2.0, 0.9, 0.2, 1.0)
+		tween.tween_property(animated_sprite, "modulate", Color(1.5, 0.7, 0.3, 1.0), 0.2)
+	
+	if current_health <= 0:
+		_die()
+
+
+## Creates a procedural CPUParticles2D fire effect — pixel-art friendly,
+## no external textures required.
+func _create_burn_effect() -> CPUParticles2D:
+	var particles := CPUParticles2D.new()
+	particles.name = "BurnFireEffect"
+	particles.position = Vector2(0, -5)  # Near zombie center
+	particles.emitting = true
+	particles.amount = 12
+	particles.lifetime = 0.5
+	particles.one_shot = false
+	particles.explosiveness = 0.1
+	particles.randomness = 0.3
+	
+	# Direction & spread
+	particles.direction = Vector2(0, -1)
+	particles.spread = 30.0
+	
+	# Speed
+	particles.initial_velocity_min = 15.0
+	particles.initial_velocity_max = 25.0
+	
+	# Gravity — slight upward drift for fire feel
+	particles.gravity = Vector2(0, -10)
+	
+	# Scale — small pixel-art particles
+	particles.scale_amount_min = 1.5
+	particles.scale_amount_max = 3.0
+	
+	# Emission shape — small sphere around zombie body
+	particles.emission_shape = CPUParticles2D.EMISSION_SHAPE_SPHERE
+	particles.emission_sphere_radius = 5.0
+	
+	# Color gradient: yellow → orange → dark red → transparent
+	var gradient := Gradient.new()
+	gradient.set_offset(0, 0.0)
+	gradient.set_color(0, Color(1.0, 0.95, 0.1, 1.0))   # Bright yellow
+	gradient.add_point(0.3, Color(1.0, 0.5, 0.0, 0.9))   # Orange
+	gradient.add_point(0.7, Color(0.8, 0.15, 0.0, 0.6))   # Dark red
+	gradient.set_offset(1, 1.0)
+	gradient.set_color(1, Color(0.3, 0.3, 0.3, 0.0))     # Transparent smoke
+	particles.color_ramp = gradient
+	
+	return particles

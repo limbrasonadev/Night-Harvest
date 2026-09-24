@@ -54,6 +54,8 @@ func _ready() -> void:
 		add_child(zombie_spawn_timer)
 	
 	zombie_spawn_timer.wait_time = spawn_interval
+	zombie_spawn_timer.autostart = false
+	zombie_spawn_timer.stop()
 	if not zombie_spawn_timer.timeout.is_connected(_on_zombie_spawn_timer_timeout):
 		zombie_spawn_timer.timeout.connect(_on_zombie_spawn_timer_timeout)
 	
@@ -61,24 +63,31 @@ func _ready() -> void:
 
 
 func _connect_game_clock() -> void:
+	if is_instance_valid(_game_clock):
+		return
 	var clock_nodes := get_tree().get_nodes_in_group("game_clock")
 	for c in clock_nodes:
 		if is_instance_valid(c):
-			_game_clock = c
-			break
-	
-	if _game_clock:
-		_game_clock.night_started.connect(_on_night_started)
-		_game_clock.night_ended.connect(_on_night_ended)
-		
-		# Initial state based on current period
-		if _game_clock.is_night():
-			_start_zombie_spawning()
-		else:
-			_stop_zombie_spawning()
-			spawn_animals()
+			bind_game_clock(c)
+			return
+	# Fallback when running standalone scene. Game setup binds its clock later.
+	spawn_animals()
+
+
+## Game setup calls this after creating its deferred GameClock.
+func bind_game_clock(clock: Node) -> void:
+	if not is_instance_valid(clock) or _game_clock == clock:
+		return
+	if is_instance_valid(_game_clock):
+		_game_clock.night_started.disconnect(_on_night_started)
+		_game_clock.night_ended.disconnect(_on_night_ended)
+	_game_clock = clock
+	_game_clock.night_started.connect(_on_night_started)
+	_game_clock.night_ended.connect(_on_night_ended)
+	if _game_clock.is_night():
+		_start_zombie_spawning()
 	else:
-		# Fallback when running standalone scene
+		_stop_zombie_spawning()
 		spawn_animals()
 
 
@@ -145,6 +154,9 @@ func spawn_zombies() -> Array[Node2D]:
 
 
 func _on_zombie_spawn_timer_timeout() -> void:
+	if not is_instance_valid(_game_clock) or not _game_clock.is_night():
+		_stop_zombie_spawning()
+		return
 	spawn_zombies()
 
 
@@ -224,8 +236,18 @@ func _on_night_started() -> void:
 
 func _on_night_ended() -> void:
 	_stop_zombie_spawning()
-	clear_zombies()
+	_ignite_all_zombies()
 	spawn_animals()
+
+
+## Ignites all living tracked zombies so they burn to death at sunrise.
+## Does NOT instantly free them — they die naturally from burn damage.
+func _ignite_all_zombies() -> void:
+	_clean_tracked_zombies()
+	for z in _spawned_zombies:
+		if is_instance_valid(z) and not z.get("is_dead"):
+			if z.has_method("start_burning"):
+				z.start_burning()
 
 
 # ==============================================================================

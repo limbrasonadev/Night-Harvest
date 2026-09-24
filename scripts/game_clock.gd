@@ -161,3 +161,26 @@ func get_day_progress() -> float:
 	if total_minutes < 0:
 		total_minutes += 1440  # 24 * 60
 	return clampf(float(total_minutes) / 1440.0, 0.0, 1.0)
+
+
+## Advances the clock to a target hour/minute on the appropriate day.
+## Properly handles midnight crossing (does NOT double-increment day).
+## Emits all intermediate signals so farming/environment/spawn systems update.
+## Used by the Bed sleeping system (Phase 7).
+func advance_to_time(target_hour: int, target_minute: int = 0) -> void:
+	var current_total := current_hour * 60 + current_minute
+	var target_total := target_hour * 60 + target_minute
+	
+	if target_total <= current_total:
+		# Target is tomorrow (e.g., 10 PM → 6 AM = need to cross midnight)
+		target_total += 1440  # +24 hours in minutes
+	
+	var minutes_to_advance := target_total - current_total
+	
+	# Advance minute-by-minute to fire all signals correctly
+	# (time_updated, period_changed, day_changed, night_started/ended)
+	for i in range(minutes_to_advance):
+		_advance_minute()
+	
+	_minute_accumulator = 0.0  # Reset fractional accumulator
+

@@ -3,7 +3,9 @@ extends CharacterBody2D
 enum State {
 	IDLE,
 	WALKING,
-	ACTING
+	ACTING,
+	EATING,
+	SLEEPING
 }
 
 const ItemDataClass = preload("res://scripts/item_data.gd")
@@ -21,10 +23,11 @@ const SwooshEffectClass = preload("res://scripts/swoosh_effect.gd")
 @export var camera_zoom: Vector2 = Vector2(3.0, 3.0)
 @export var camera_smoothing_enabled: bool = true
 @export var camera_smoothing_speed: float = 10.0
-@export var camera_limit_left: int = -500
-@export var camera_limit_top: int = -500
-@export var camera_limit_right: int = 800
-@export var camera_limit_bottom: int = 800
+@export var auto_detect_camera_limits: bool = true
+@export var camera_limit_left: int = -1456
+@export var camera_limit_top: int = -464
+@export var camera_limit_right: int = 880
+@export var camera_limit_bottom: int = 576
 
 @export_group("Torch Settings")
 @export var placement_distance: float = 24.0
@@ -57,6 +60,12 @@ var current_held_item: Resource = null
 var current_action_type: int = 0
 var impact_executed: bool = false
 var _current_action_timestamp: int = 0
+var _is_eating: bool = false ## True during eating animation
+var _eating_item_data: Resource = null ## The food item being consumed
+var _is_sleeping: bool = false ## True during sleeping sequence (Phase 7)
+var _pre_sleep_rotation: float = 0.0
+var _pre_sleep_collision_disabled: bool = false
+var _pre_sleep_sprite_offset: Vector2 = Vector2.ZERO
 
 # Camera Middle-Mouse Drag Panning
 var is_panning_camera: bool = false
@@ -97,6 +106,7 @@ func _ready() -> void:
 		play_idle_animation()
 	
 	_setup_camera()
+	call_deferred("_setup_camera")
 	
 	if not InputMap.has_action("unhoe_soil"):
 		InputMap.add_action("unhoe_soil")
@@ -118,6 +128,37 @@ func _connect_hotbar() -> void:
 		_on_hotbar_slot_selected(hotbar.selected_slot, item)
 
 
+func _detect_map_bounds() -> Rect2:
+	var root := get_parent()
+	if not root:
+		return Rect2()
+	var tilemap := root.get_node_or_null("TileMap")
+	if not tilemap:
+		return Rect2()
+	
+	var min_pos := Vector2(999999, 999999)
+	var max_pos := Vector2(-999999, -999999)
+	var has_bounds := false
+	
+	for child in tilemap.get_children():
+		if child is TileMapLayer:
+			var layer := child as TileMapLayer
+			var rect := layer.get_used_rect()
+			if rect.has_area() and layer.tile_set:
+				var ts := layer.tile_set.tile_size
+				var l_min := Vector2(rect.position * ts)
+				var l_max := Vector2(rect.end * ts)
+				min_pos.x = min(min_pos.x, l_min.x)
+				min_pos.y = min(min_pos.y, l_min.y)
+				max_pos.x = max(max_pos.x, l_max.x)
+				max_pos.y = max(max_pos.y, l_max.y)
+				has_bounds = true
+	
+	if has_bounds:
+		return Rect2(min_pos, max_pos - min_pos)
+	return Rect2()
+
+
 func _setup_camera() -> void:
 	if not camera:
 		camera = get_node_or_null("Camera2D")
@@ -125,6 +166,16 @@ func _setup_camera() -> void:
 		camera.zoom = camera_zoom
 		camera.position_smoothing_enabled = camera_smoothing_enabled
 		camera.position_smoothing_speed = camera_smoothing_speed
+		
+		if auto_detect_camera_limits:
+			var bounds := _detect_map_bounds()
+			if bounds.has_area():
+				camera.limit_left = int(bounds.position.x)
+				camera.limit_top = int(bounds.position.y)
+				camera.limit_right = int(bounds.end.x)
+				camera.limit_bottom = int(bounds.end.y)
+				return
+		
 		camera.limit_left = camera_limit_left
 		camera.limit_top = camera_limit_top
 		camera.limit_right = camera_limit_right
@@ -143,9 +194,8 @@ func _process(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
-	if _is_dead:
+	if _is_dead or _is_sleeping:
 		velocity = Vector2.ZERO
-		move_and_slide()
 		return
 	
 	# Torch light natural flame flicker
@@ -204,7 +254,7 @@ func _physics_process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _is_dead:
+	if _is_dead or _is_sleeping:
 		return
 	
 	# Middle-mouse camera drag panning (processed unless UI is blocking)
@@ -306,7 +356,7 @@ func _is_cooldown_ready() -> bool:
 # ==============================================================================
 
 func trigger_primary_action() -> void:
-	if is_acting or is_ui_blocking():
+	if is_acting or is_ui_blocking() or _is_sleeping:
 		return
 	
 	# If no item is equipped in active slot, check if player is facing a mature crop to harvest
@@ -336,6 +386,8 @@ func trigger_primary_action() -> void:
 			trigger_harvest()
 		ItemDataClass.ActionType.PLANT:
 			trigger_plant()
+		ItemDataClass.ActionType.EAT:
+			trigger_eat()
 		_:
 			if current_held_item and current_held_item.get("item_type") == ItemDataClass.ItemType.SEED:
 				trigger_plant()
@@ -343,6 +395,8 @@ func trigger_primary_action() -> void:
 				trigger_till()
 			elif current_held_item and current_held_item.get("item_id") == "watering_can":
 				trigger_watering()
+			elif current_held_item and current_held_item.get("edible") == true:
+				trigger_eat()
 			else:
 				trigger_swing()
 
@@ -514,6 +568,208 @@ func trigger_harvest() -> bool:
 	var inv := get_inventory()
 	farm_mgr.harvest_crop(target_pos, inv)
 	return true
+
+
+# ==============================================================================
+# EATING SYSTEM (Phase 6)
+# ==============================================================================
+
+## Eats the currently selected food item from the hotbar.
+## Validates: item exists, is edible, quantity > 0, hunger not full.
+## Uses a tween-based "bite" animation that keeps Ken standing.
+func trigger_eat() -> void:
+	if is_acting or is_ui_blocking():
+		return
+	
+	var hotbar: Control = get_hotbar()
+	var inv: Control = get_inventory()
+	if not inv or not current_held_item:
+		return
+	
+	# Validate edible
+	var is_edible: bool = current_held_item.get("edible") == true
+	if not is_edible:
+		return
+	
+	# Validate quantity
+	var active_slot: int = 0
+	if hotbar and hotbar.get("selected_slot") != null:
+		active_slot = hotbar.get("selected_slot")
+	
+	var slot_data: Dictionary = {}
+	if hotbar and hotbar.has_method("get_slot_data"):
+		slot_data = hotbar.call("get_slot_data", active_slot)
+	elif inv.has_method("get_hotbar_item_at"):
+		slot_data = inv.call("get_hotbar_item_at", active_slot)
+	
+	var amount: int = slot_data.get("amount", 0)
+	if amount <= 0:
+		return
+	
+	# Validate hunger needs restoration
+	if not _player_stats:
+		_player_stats = _find_player_stats()
+	if _player_stats and _player_stats.is_full():
+		var hud = _find_hud()
+		if hud and hud.has_method("show_hud_message"):
+			hud.show_hud_message("Already full!", 1.5)
+		print("Ken: Already full!")
+		return
+	
+	# Cache the food item data for the animation (consumption happens AFTER anim)
+	_eating_item_data = current_held_item
+	
+	# Lock state — Ken stays standing (idle animation), but actions are blocked
+	is_acting = true
+	current_state = State.EATING
+	_is_eating = true
+	velocity = Vector2.ZERO
+	
+	# Keep the idle animation playing (standing, correct direction)
+	play_idle_animation()
+	
+	# Start the tween-based bite animation
+	_start_eating_animation()
+
+
+## Tween-based eating animation: food icon moves toward mouth 3 times (3 bites).
+## Ken stays in idle/standing animation throughout.
+func _start_eating_animation() -> void:
+	if not _eating_item_data:
+		_finish_eating()
+		return
+	
+	# Show food icon on held item sprite
+	var food_icon: Texture2D = _eating_item_data.get("icon")
+	if held_item_sprite and food_icon:
+		held_item_sprite.texture = food_icon
+		held_item_sprite.visible = true
+		held_item_sprite.rotation_degrees = 0.0
+		held_item_sprite.flip_h = false
+		held_item_sprite.scale = Vector2(1.0, 1.0)
+	
+	# Get directional positions for hand (start) and mouth (target)
+	var dir_key := _get_direction_key()
+	var hand_pos := Vector2.ZERO
+	var mouth_pos := Vector2.ZERO
+	match dir_key:
+		"down":
+			hand_pos = Vector2(6, 2)
+			mouth_pos = Vector2(3, -2)
+		"up":
+			hand_pos = Vector2(-5, 0)
+			mouth_pos = Vector2(-3, -6)
+		"left":
+			hand_pos = Vector2(-8, 1)
+			mouth_pos = Vector2(-5, -3)
+		"right":
+			hand_pos = Vector2(8, 1)
+			mouth_pos = Vector2(5, -3)
+	
+	if held_item_anchor:
+		held_item_anchor.position = hand_pos
+		held_item_anchor.z_index = 1
+	
+	# Create tween: 3 bites (hand → mouth → hand) + final cleanup
+	var eat_tween := create_tween()
+	eat_tween.set_trans(Tween.TRANS_SINE)
+	eat_tween.set_ease(Tween.EASE_IN_OUT)
+	
+	for i in range(3):
+		# Bite: move food toward mouth
+		eat_tween.tween_property(held_item_anchor, "position", mouth_pos, 0.12)
+		# Small scale pulse on "bite" to simulate crunch
+		eat_tween.tween_property(held_item_sprite, "scale", Vector2(0.85, 0.85), 0.04)
+		eat_tween.tween_property(held_item_sprite, "scale", Vector2(1.0, 1.0), 0.04)
+		# Return food to hand
+		eat_tween.tween_property(held_item_anchor, "position", hand_pos, 0.08)
+	
+	# Brief hold at end then finish
+	eat_tween.tween_interval(0.06)
+	eat_tween.tween_callback(_finish_eating)
+	
+	# Play eating sound
+	_play_eating_sound()
+
+
+## Completes the eating action: consumes item, restores hunger, cleans up state.
+## Called by the eating tween after the bite animation finishes.
+func _finish_eating() -> void:
+	if not _is_eating:
+		return
+	
+	var hotbar: Control = get_hotbar()
+	var inv: Control = get_inventory()
+	var active_slot: int = 0
+	if hotbar and hotbar.get("selected_slot") != null:
+		active_slot = hotbar.get("selected_slot")
+	
+	# Read hunger_restore and metadata from cached food data
+	var hunger_restore: float = _eating_item_data.get("hunger_restore") if _eating_item_data and _eating_item_data.get("hunger_restore") != null else 0.0
+	var item_id: String = _eating_item_data.get("item_id") if _eating_item_data and _eating_item_data.get("item_id") != null else ""
+	var food_name: String = _eating_item_data.get("display_name") if _eating_item_data and _eating_item_data.get("display_name") != null else "Food"
+	
+	# Consume 1 item from hotbar
+	var removed = null
+	if inv:
+		if inv.has_method("remove_hotbar_item_at"):
+			removed = inv.call("remove_hotbar_item_at", active_slot, 1)
+		elif inv.has_method("remove_item_at"):
+			removed = inv.call("remove_item_at", active_slot, 1)
+	
+	# Restore hunger
+	if removed:
+		if not _player_stats:
+			_player_stats = _find_player_stats()
+		if _player_stats:
+			_player_stats.restore_hunger(hunger_restore)
+		
+		# Notify event bus
+		_notify_event_bus("food_eaten", [item_id])
+		
+		print("Ken: Ate %s (+%d hunger)" % [food_name, int(hunger_restore)])
+	
+	# Clean up eating state
+	_is_eating = false
+	_eating_item_data = null
+	is_acting = false
+	current_state = State.IDLE
+	
+	# Reset held item sprite scale
+	if held_item_sprite:
+		held_item_sprite.scale = Vector2(1.0, 1.0)
+	
+	# Restore held item visual (shows equipped tool/item or hides if empty)
+	_update_held_item_visuals()
+	
+	# Return to correct idle animation based on facing direction
+	play_idle_animation()
+
+
+## Plays eating sound effect. Audio assets required:
+## - res://Assets/Items/eat_bite.wav (crunch/bite sound)
+## - res://Assets/Items/eat_drink.wav (drinking/slurping, future)
+func _play_eating_sound() -> void:
+	# Hook: load and play eating audio when assets are available
+	var eat_sound_path := "res://Assets/Items/eat_bite.wav"
+	if ResourceLoader.exists(eat_sound_path):
+		var audio_player := AudioStreamPlayer.new()
+		audio_player.stream = load(eat_sound_path)
+		audio_player.volume_db = -6.0
+		add_child(audio_player)
+		audio_player.play()
+		audio_player.finished.connect(audio_player.queue_free)
+
+
+## Finds the HUD node for showing messages.
+func _find_hud() -> Control:
+	if not get_tree():
+		return null
+	var hud_nodes := get_tree().get_nodes_in_group("hud_ui")
+	for node in hud_nodes:
+		if is_instance_valid(node):
+			return node as Control
+	return null
 
 
 
@@ -787,7 +1043,7 @@ func _update_tool_hitbox_position() -> void:
 # ==============================================================================
 
 func trigger_interact() -> void:
-	if is_ui_blocking():
+	if is_ui_blocking() or _is_sleeping:
 		return
 	
 	# 0. Check for nearby mature crop to harvest
@@ -797,7 +1053,13 @@ func trigger_interact() -> void:
 		trigger_harvest()
 		return
 	
-	# 1. Check for nearby Chest
+	# 1. Check for nearby Bed (Phase 7)
+	var bed := _get_closest_bed()
+	if bed and is_instance_valid(bed):
+		bed.interact(self)
+		return
+	
+	# 2. Check for nearby Chest
 	var chest: ChestEntity = get_closest_chest()
 	if chest and is_instance_valid(chest):
 		chest.interact(self)
@@ -836,6 +1098,66 @@ func get_closest_chest() -> ChestEntity:
 				min_dist = dist
 				closest = node
 	return closest
+
+
+func _get_closest_bed() -> Node2D:
+	if not get_tree():
+		return null
+	var beds := get_tree().get_nodes_in_group("beds")
+	var closest: Node2D = null
+	var min_dist := interaction_distance + 16.0
+	for node in beds:
+		if is_instance_valid(node) and node.has_method("can_interact"):
+			if node.can_interact(self):
+				var dist := global_position.distance_to(node.global_position)
+				if dist <= min_dist:
+					min_dist = dist
+					closest = node
+	return closest
+
+
+## Called by Bed.gd when Ken goes to sleep
+func enter_sleep_state() -> void:
+	if _is_sleeping:
+		return
+	_pre_sleep_rotation = rotation
+	_pre_sleep_sprite_offset = animated_sprite.offset
+	_is_sleeping = true
+	current_state = State.SLEEPING
+	velocity = Vector2.ZERO
+	is_acting = false
+	# This top-down bed is vertical; keep the centered Ken visual upright.
+	rotation = 0.0
+	var col := get_node_or_null("CollisionShape2D")
+	if col:
+		_pre_sleep_collision_disabled = col.disabled
+		col.disabled = true
+	_update_held_item_visuals()
+	# Display the face without changing last_direction (restored idle uses it).
+	animated_sprite.flip_h = false
+	animated_sprite.flip_v = false
+	animated_sprite.animation = &"idle_front"
+	animated_sprite.stop()
+	animated_sprite.frame = 0
+	# Front frame's opaque bounds are Rect2(8, 2, 16, 30) in a 32x32 cell.
+	# Its visible center is one pixel below the origin; align it to SleepPosition.
+	animated_sprite.offset = Vector2(0, -1)
+
+
+## Called by Bed.gd when Ken wakes up
+func exit_sleep_state() -> void:
+	if not _is_sleeping:
+		return
+	_is_sleeping = false
+	current_state = State.IDLE
+	rotation = _pre_sleep_rotation
+	animated_sprite.offset = _pre_sleep_sprite_offset
+	velocity = Vector2.ZERO
+	var col := get_node_or_null("CollisionShape2D")
+	if col:
+		col.disabled = _pre_sleep_collision_disabled
+	_update_held_item_visuals()
+	play_idle_animation()
 
 
 func trigger_drop_item() -> void:
@@ -987,6 +1309,13 @@ func _on_hotbar_slot_selected(_slot_index: int, item_data: Resource) -> void:
 func _update_held_item_visuals() -> void:
 	if not held_item_anchor:
 		return
+	if _is_sleeping:
+		if held_item_sprite:
+			held_item_sprite.visible = false
+		if held_torch_flame:
+			held_torch_flame.visible = false
+		_update_torch_light_state()
+		return
 	
 	var is_torch: bool = (current_held_item != null and current_held_item.get("item_id") == "torch")
 	
@@ -1040,7 +1369,7 @@ func _update_torch_light_state() -> void:
 	if not torch_light:
 		return
 	var is_torch: bool = (current_held_item != null and current_held_item.get("item_id") == "torch")
-	if not is_torch:
+	if not is_torch or _is_sleeping:
 		torch_light.enabled = false
 		return
 	
@@ -1104,6 +1433,9 @@ func get_facing_direction(direction: Vector2) -> Vector2:
 # ==============================================================================
 
 func _on_animation_finished() -> void:
+	# Eating uses its own tween-based cleanup (_finish_eating), skip here
+	if _is_eating:
+		return
 	if is_acting:
 		var completed_action := current_action_type
 		is_acting = false
@@ -1117,6 +1449,11 @@ func _on_animation_finished() -> void:
 		
 		if completed_action == ItemDataClass.ActionType.WATER:
 			_notify_event_bus("crop_watered")
+		
+		# Clean up eating state (Phase 6)
+		if completed_action == ItemDataClass.ActionType.EAT:
+			_is_eating = false
+			_eating_item_data = null
 		
 		# Restore held item visual in case it was hidden
 		_update_held_item_visuals()
@@ -1280,6 +1617,11 @@ func is_ui_blocking() -> bool:
 	var map_nodes := get_tree().get_nodes_in_group("map_ui")
 	for m in map_nodes:
 		if is_instance_valid(m) and m.get("is_open"):
+			return true
+	
+	var sleep_nodes := get_tree().get_nodes_in_group("sleep_ui")
+	for s in sleep_nodes:
+		if is_instance_valid(s) and s.get("is_open"):
 			return true
 	
 	return false
